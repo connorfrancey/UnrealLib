@@ -1,6 +1,5 @@
 # ----------------------------------------------------------------------------------------------------------------------
-# Command-line tools (CLI11). PackageExtractor and ScriptDecompiler will be added with the asset (M7) and
-# decompiler (M6) milestones.
+# Command-line tools (CLI11). PackageExtractor will be added with the asset milestone (M7).
 # ----------------------------------------------------------------------------------------------------------------------
 
 add_library(unreallib_tools_common STATIC
@@ -18,3 +17,4 @@ endfunction()
 
 unreallib_add_tool(unreallib_package_inspector UnrealPackageInspector PackageInspector/main.cpp)
 unreallib_add_tool(unreallib_package_validator UnrealPackageValidator PackageValidator/main.cpp)
+unreallib_add_tool(unreallib_script_decompiler UnrealScriptDecompiler ScriptDecompiler/main.cpp)

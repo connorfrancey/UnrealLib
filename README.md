@@ -25,10 +25,10 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
   rewriting, type information from the game's own script packages (`ReflectionSchema`).
 * Reflection objects (`UClass`, `UStruct`, `UFunction`, `UState`, `UEnum`, `UConst`, properties, text buffers) and an
   UnrealScript bytecode decoder with the Mirror's Edge token map.
-* Decompiler for functions and states: expressions with operator precedence, if/else, loops (`for`, `while`,
+* Decompiler for whole classes (declaration, structs, enums, consts, variables, replication, `defaultproperties`), functions and states: expressions with operator precedence, if/else, loops (`for`, `while`,
   `do`/`until`, `foreach`), `switch`, break/continue; native function table built from the game itself.
 * Differential tests against upstream C# UELib (opt-in, needs the .NET SDK).
-* Tools: `UnrealPackageInspector` (text or normalized JSON) and `UnrealPackageValidator`.
+* Tools: `UnrealPackageInspector` (text or normalized JSON), `UnrealPackageValidator` and `UnrealScriptDecompiler`.
 
 ## Quick start
 

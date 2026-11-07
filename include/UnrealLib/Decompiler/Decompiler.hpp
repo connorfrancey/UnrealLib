@@ -12,7 +12,9 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -62,6 +64,18 @@ namespace UnrealLib::Decompiler
         /// @throws Error (InvalidArgument) if @p object is not a function or state; SerializationError on bad data.
         [[nodiscard]] DecompiledScript decompile(ObjectRef object);
 
+        /// @brief Decompiles a Class export to a complete `.uc` source: declaration, constants, enums, structs,
+        ///        variables, replication, functions, states and `defaultproperties` (with subobject blocks).
+        ///
+        /// The counters of the result add up those of every function and state; `placeholders` also counts default
+        /// property values that could not be decoded.
+        /// @throws Error (InvalidArgument) if @p object is not a class; SerializationError on bad data.
+        [[nodiscard]] DecompiledScript decompile_class(ObjectRef object);
+
+        /// @brief Type information for `defaultproperties` and `structdefaultproperties` (normally a ReflectionSchema
+        ///        over the game's script packages). Without one, script-declared structs and arrays print as raw.
+        void set_schema(const PropertySchema* schema) noexcept { m_schema = schema; }
+
         /// @brief Decompiles the statements of @p script, which belongs to @p owner (a function or state export).
         ///        The source holds the body only, at indentation @p depth.
         [[nodiscard]] DecompiledScript decompile_body(const Script& script, ObjectRef owner,
@@ -93,6 +107,26 @@ namespace UnrealLib::Decompiler
 
         /// @brief Super class (or super state) name of the struct that declares @p function ("" if none).
         [[nodiscard]] std::string super_of_outer(ObjectRef function);
+
+        // Class-level output (ClassDecompiler.cpp).
+        [[nodiscard]] std::vector<ObjectRef> children(ObjectRef owner);
+        [[nodiscard]] std::string variable_declaration(ObjectRef property, std::string_view owner_name);
+        [[nodiscard]] std::string struct_source(ObjectRef structure, int depth, DecompiledScript& totals);
+        [[nodiscard]] std::string enum_source(ObjectRef enumeration, int depth);
+        [[nodiscard]] std::string const_source(ObjectRef constant, int depth);
+        [[nodiscard]] std::string class_header(ObjectRef object, const FieldObject& field);
+        [[nodiscard]] std::string replication(ObjectRef object, const FieldObject& field,
+                                              const std::vector<ObjectRef>& properties, DecompiledScript& totals);
+        [[nodiscard]] std::string properties_block(ObjectRef object, std::string_view keyword, int depth,
+                                                   DecompiledScript& totals);
+        void property_lines(ObjectRef object, int depth, std::string& out, DecompiledScript& totals, int nesting = 0);
+        void format_properties(const Package& package, const std::vector<Property>& properties,
+                               const std::set<std::int32_t>& subobjects, int depth, std::string& out,
+                               DecompiledScript& totals);
+        [[nodiscard]] std::string indentation(int depth) const;
+        static void accumulate(DecompiledScript& totals, const DecompiledScript& part);
+
+        const PropertySchema* m_schema = nullptr;
 
         Linker& m_linker;
         NativeTable m_natives;

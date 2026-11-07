@@ -11,6 +11,9 @@
 
 namespace UnrealLib::Decompiler
 {
+    /// Prefixes every non-empty line of @p text with @p indent.
+    [[nodiscard]] std::string indent_lines(std::string_view text, std::string_view indent);
+
     class Printer
     {
     public:

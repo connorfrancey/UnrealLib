@@ -26,6 +26,7 @@
 #include <UnrealLib/Decompiler/Decompiler.hpp>
 #include <UnrealLib/Decompiler/NativeTable.hpp>
 #include <UnrealLib/Linker/Linker.hpp>
+#include <UnrealLib/Linker/ReflectionSchema.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
 
 #include "Support/FixtureSupport.hpp"
@@ -187,4 +188,76 @@ TEST(MirrorsEdgeDecompilerTests, ScriptPackageFunctionsAndStates)
     EXPECT_EQ(tally.failures, 0u);
     EXPECT_EQ(tally.unknown_natives, 0u);
     EXPECT_EQ(tally.placeholders, 0u);
+}
+
+TEST(MirrorsEdgeDecompilerTests, ScriptPackageClasses)
+{
+    // Every class of the script packages decompiled to a whole .uc file (declaration, members, functions, states,
+    // defaultproperties). Checked: nothing throws, no unknown natives, no placeholders (raw default values
+    // included), and the output names the class.
+    if (!fixtures_available())
+    {
+        GTEST_SKIP() << "UNREALLIB_MIRRORSEDGE_DIR is not set";
+    }
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    const auto scripts = load_script_packages(linker);
+    ASSERT_FALSE(scripts.empty());
+    ReflectionSchema schema(linker);
+    for (const Package* package : scripts) schema.add_package(*package);
+
+    ScriptDecompiler decompiler(linker, NativeTable::from_packages(linker, scripts));
+    decompiler.set_schema(&schema);
+    const std::string dump_dir = env("UNREALLIB_DECOMPILE_DUMP");
+    std::size_t classes = 0, failures = 0, unknown_natives = 0, placeholders = 0, lines = 0;
+    std::map<std::string, std::size_t> messages;
+    for (const Package* package : scripts)
+    {
+        for (std::size_t i = 0; i < package->exports().size(); ++i)
+        {
+            const ObjectRef ref{package, ObjectIndex::from_export(i)};
+            if (package->class_name(ref.index) != "Class" || package->exports()[i].serial_size <= 0)
+            {
+                continue;
+            }
+            ++classes;
+            try
+            {
+                const DecompiledScript result = decompiler.decompile_class(ref);
+                unknown_natives += result.unknown_natives;
+                placeholders += result.placeholders;
+                lines += static_cast<std::size_t>(std::count(result.source.begin(), result.source.end(), '\n'));
+                EXPECT_NE(result.source.find(" " + package->object_name(ref.index)), std::string::npos);
+                for (const auto& d : result.diagnostics.entries())
+                {
+                    if (d.severity != Severity::Info && messages[d.code]++ < 5)
+                    {
+                        std::cout << "    " << d.code << ": " << d.message << '\n';
+                    }
+                }
+                if (!dump_dir.empty())
+                {
+                    const fs::path directory = fs::path(dump_dir) / "Classes" / package->name();
+                    fs::create_directories(directory);
+                    std::ofstream(directory / (package->object_name(ref.index) + ".uc"), std::ios::binary)
+                        << result.source;
+                }
+            }
+            catch (const Error& error)
+            {
+                if (failures++ < 10)
+                {
+                    ADD_FAILURE() << linker.qualified_path(ref) << ": " << error.what();
+                }
+            }
+        }
+    }
+    std::cout << "  classes: " << classes << ", lines: " << lines << ", failures: " << failures
+              << ", unknown natives: " << unknown_natives << ", placeholders: " << placeholders << '\n';
+    for (const auto& [code, count] : messages) std::cout << "    " << count << "x " << code << '\n';
+    ::testing::Test::RecordProperty("classes", static_cast<int>(classes));
+    EXPECT_GT(classes, 1000u);
+    EXPECT_EQ(failures, 0u);
+    EXPECT_EQ(unknown_natives, 0u);
+    EXPECT_EQ(placeholders, 0u);
 }

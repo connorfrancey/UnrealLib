@@ -356,7 +356,26 @@ namespace UnrealLib::Decompiler
             {
                 header += " extends " + package.object_name(field.field.super);
             }
-            source = header + "\n{\n" + body.source + "}\n";
+            // The state's own functions (overrides defined in it), then its label code. The children list holds
+            // them in reverse declaration order, as for every struct (upstream UState.FormatFunctions).
+            std::string functions;
+            std::vector<ObjectRef> members = children(object);
+            for (auto it = members.rbegin(); it != members.rend(); ++it)
+            {
+                if (package.class_name(it->index) != "Function")
+                {
+                    continue;
+                }
+                const FieldObject member = m_linker.read_field(*it);
+                if (!member.function || (member.function->flags & FunctionFlag::Defined) == 0)
+                {
+                    continue;
+                }
+                const DecompiledScript function = decompile(*it);
+                accumulate(body, function);
+                functions += indent_lines(function.source, m_options.indent) + "\n";
+            }
+            source = header + "\n{\n" + functions + body.source + "}\n";
         }
         else
         {

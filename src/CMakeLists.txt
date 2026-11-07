@@ -95,6 +95,7 @@ unreallib_add_module(Linker
 
 unreallib_add_module(Decompiler
         SOURCES
+            Decompiler/ClassDecompiler.cpp
             Decompiler/Decompiler.cpp
             Decompiler/NativeTable.cpp
             Decompiler/Printer.cpp

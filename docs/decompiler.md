@@ -1,8 +1,9 @@
 # Decompiler
 
-`UnrealLib::Decompiler` turns UnrealScript bytecode back into UnrealScript-style source. Status: **functions and
-states** are decompiled (declaration, parameters, locals, body); class-level output (class declaration, variables,
-structs, enums, consts, `defaultproperties`) is the next step of milestone M6.
+`UnrealLib::Decompiler` turns UnrealScript bytecode back into UnrealScript-style source. Status: complete for
+Mirror's Edge: **functions, states and whole classes** (class declaration, constants, enums, structs with
+`structdefaultproperties`, variables, replication, functions, states with their functions and labels,
+`defaultproperties` with `Begin Object` subobject blocks).
 
 ## Pipeline
 
@@ -25,6 +26,32 @@ UnrealLib::Decompiler::ScriptDecompiler decompiler(linker, std::move(natives));
 auto result = decompiler.decompile(function_ref);   // a Function or State export
 std::cout << result.source;
 bool exact = result.clean();   // no placeholders, gotos or structure problems
+```
+
+## Classes
+
+`ScriptDecompiler::decompile_class(ref)` produces a whole `.uc` file. Pass a `ReflectionSchema` over the game's script
+packages with `set_schema()` so arrays and script-declared structs in default properties decode (without one they
+are printed as comments and counted as placeholders).
+
+* **Declaration.** Only what differs from the parent class is declared: inheritable flags (`transient`,
+  `config(...)`, `placeable`, `editinlinenew`, `collapsecategories`, …), `within`, `hidecategories`,
+  `autoexpandcategories` and `implements(...)` lists. A class whose parent is placeable but which is not prints
+  `notplaceable`.
+* **Members.** Constants, enums, structs, functions and states are printed in declaration order (the children list
+  stores them in reverse); variables in children-list order. The compiler-generated `<Enum>_MAX` value is dropped,
+  and the hidden `__X__Delegate` variables are printed as comments.
+* **Replication.** Every replicated variable stores the offset of its condition in the class script (`RepOffset`);
+  variables sharing a condition are grouped under one `if (...)`.
+* **Default properties.** The class default object's properties; exports whose outer is that object become
+  `Begin Object Class=… Name=…` blocks (nested up to 8 levels). Arrays print one `Name(i)=…` line per element, or
+  `Name.Empty` when empty.
+
+The `UnrealScriptDecompiler` tool writes one `<output>/<Package>/Classes/<Class>.uc` per class:
+
+```powershell
+UnrealScriptDecompiler.exe "…/CookedPC/Engine.u" --output scripts/
+UnrealScriptDecompiler.exe "…/CookedPC/Core.u" --class Object --stdout
 ```
 
 ## Native functions
@@ -71,6 +98,10 @@ are generated; state code labels come from the state's `LabelTable`.
   jump to a shared `TdGotoState(...)` call and to the function end from many places: written with labels in the
   original source, not a structuring failure.
 
+`MirrorsEdgeDecompilerTests.ScriptPackageClasses` decompiles every class of the script packages: 2,338 classes,
+about 220,000 lines, 0 failures, 0 unknown natives, 0 placeholders (every default property decodes with the
+`ReflectionSchema`).
+
 Set `UNREALLIB_DECOMPILE_DUMP=<dir>` to write every decompiled script as `.uc` for review (game-derived output: never
 commit it), and `UNREALLIB_DECOMPILE_TRACE=<function name>` to print a script's token tree with offsets.
 
@@ -86,4 +117,14 @@ Unit tests (`tests/Unit/Decompiler`) cover each control-flow pattern on hand-ass
 | Operator parentheses | right operand of equal precedence unparenthesized (`a - (b - c)` printed as `a - b - c`) | left-associative: equal-precedence right operands are parenthesized |
 | `DynamicArrayAdd` | always reads a trailing `EndFunctionParms` | only from version 649, like the other array intrinsics: Mirror's Edge (536) has none, and reading one swallowed the next statement. Every expected terminator is now checked |
 | Parameter modifiers | — | `optional const out coerce`, matching the original source order |
+| Class declaration | prints the class's own flags | prints only flags and lists that differ from the parent class (what the source declared) |
 | Control flow | nest manager interleaved with printing | separate statement IR (`structure()`), explicit gotos counted |
+
+## Limitations
+
+* Comments, `cpptext`/`structcpptext` blocks and `#exec` directives are not stored in cooked packages and cannot be
+  recovered. Function-local labels are generated (`J0x…`).
+* Variable declaration order within a class follows the children list, which matches the source for compiled
+  scripts but is not guaranteed by the format.
+* Default values equal to the parent's are not stored by the cooker, so `defaultproperties` holds only overrides.
+* Some modifiers have no flag on disk (e.g. `dependson`, `showcategories`) and are not printed.

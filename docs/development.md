@@ -62,7 +62,7 @@ Presets: `msvc-x64-debug`, `msvc-x64-release`, `msvc-x86-debug`, `msvc-x86-relea
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `UNREALLIB_BUILD_TESTS` | top-level | GoogleTest suite |
-| `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator` |
+| `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator`, `UnrealScriptDecompiler` |
 | `UNREALLIB_BUILD_EXAMPLES` | top-level | examples |
 | `UNREALLIB_BUILD_BENCHMARKS` | OFF | (no benchmarks yet) |
 | `UNREALLIB_BUILD_DOCS` | OFF | `unreallib_docs` Doxygen target |
@@ -205,19 +205,16 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 | M3 | Linker (cross-package import resolution, search paths, cycles), class hierarchy (`is_a`), UObject header | **done** (verified on 2426 packages); typed object model continues in M4/M5 |
 | M4 | Property tags, typed property values, struct/array/map, unknown-property preservation | **done** (verified on 2426 packages: 9,656,419 properties, byte-exact round trip; with `ReflectionSchema` every one of 1,639,154 arrays decodes). `MapProperty` values are kept as raw bytes |
 | M5 | Reflection (`UField`/`UStruct`/`UClass`/`UFunction`/`UState`/`UEnum`/`UConst`), bytecode decoder + IR | **done** (verified on 2426 packages: every reflection export consumes its data exactly; 13,770 scripts / 477,343 tokens end exactly at ScriptSize) |
-| M6 | Decompiler (expressions, control flow, UnrealScript output) | **in progress**: functions and states done (13,244 scripts, 0 placeholders, 13,241 fully structured; see [decompiler.md](decompiler.md)); class-level output next |
+| M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
 | M7 | Assets (textures first, then sound, meshes, materials, animation) + PackageExtractor | |
 | M8 | T3D, package writer, LZO compression | |
 | M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | |
 
 ### Next concrete tasks
 
-1. M6 (rest): class-level output — class declaration (modifiers, `within`, `config`, interfaces), instance
-   variables, structs, enums, consts, replication, states with their functions, `defaultproperties`; a
-   `ScriptDecompiler` tool writing one `.uc` per class.
-2. Differential tests for M4/M5: compare property values and bytecode tokens with upstream UELib, not only the tables.
-3. Decode `MapProperty` values (kept raw today) once a fixture shows their layout.
-4. libFuzzer harness (clang-cl) and benchmarks for LZO decode, table parsing, import resolution and property parsing.
+1. Differential tests for M4/M5: compare property values and bytecode tokens with upstream UELib, not only the tables.
+2. Decode `MapProperty` values (kept raw today) once a fixture shows their layout.
+3. libFuzzer harness (clang-cl) and benchmarks for LZO decode, table parsing, import resolution and property parsing.
 
 ## Known limitations
 
@@ -228,8 +225,7 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 * Without a `ReflectionSchema`, only the built-in Core math structs are known: arrays and script-declared structs
   are kept as raw bytes (losslessly). Pass a `ReflectionSchema` over the game's script packages to decode them all.
 * `MapProperty` values are kept as raw bytes.
-* The decompiler covers functions and states; class declarations, variables and `defaultproperties` are not
-  decompiled yet. Labels in function code are generated (`J0x…`): only state code stores label names.
+* Decompiler: comments, `cpptext` and `#exec` directives are not stored in cooked packages. Labels in function code are generated (`J0x…`): only state code stores label names.
 * Intrinsic (native-only) classes are recognised by rule — an unexported `Core.Class` import — not from a list; their
   super chain is unknown (`Linker::is_a` returns std::nullopt for them, except "is not a Core.Component").
 * File versions < 249 and ≥ 767, UE4/UE5, and LZX compression are rejected.
