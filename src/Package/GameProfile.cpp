@@ -45,6 +45,8 @@ namespace UnrealLib
         p.cooker_versions = {60, 0};
         p.endian = Endian::Little;
         p.compression_methods = {CompressionMethod::None, CompressionMethod::Lzo};
+        // Upstream DefaultEngineBranch.BuildTokenMap: `case MirrorsEdge: tokenMap[0x4F] = typeof(UnresolvedToken)`.
+        p.bytecode_overrides = {{std::uint8_t{0x4F}, "Unresolved"}};
         p.verified = true;
         p.notes =
             "Upstream UELib: GameBuild [Build(536, 43)] MirrorsEdge. Verified against the Steam release: 2425/2426 "

@@ -107,6 +107,42 @@ if (UNREALLIB_BUILD_TESTS)
                 "BUILD_GMOCK ON"
                 "gtest_force_shared_crt ON"
     )
+
+    # Property-based testing (RC_GTEST_PROP): generated inputs with shrinking, run as ordinary GoogleTest tests.
+    CPMAddPackage(
+            NAME rapidcheck
+            GITHUB_REPOSITORY emil-e/rapidcheck
+            GIT_TAG ${RAPIDCHECK_TAG}
+            OPTIONS
+                "RC_ENABLE_GTEST ON"
+                "RC_ENABLE_GMOCK OFF"
+                "RC_ENABLE_BOOST OFF"
+                "RC_ENABLE_CATCH OFF"
+                "RC_ENABLE_DOCTEST OFF"
+                "RC_ENABLE_TESTS OFF"
+                "RC_ENABLE_EXAMPLES OFF"
+                "RC_INSTALL_ALL_EXTRAS OFF"
+    )
+
+    # Approval (golden master) tests: output compared against committed tests/Regression/approved/*.approved.txt.
+    # Uses our GoogleTest; its own tests, examples and bundled third-party frameworks are off.
+    CPMAddPackage(
+            NAME ApprovalTests
+            GITHUB_REPOSITORY approvals/ApprovalTests.cpp
+            GIT_TAG ${APPROVALTESTS_TAG}
+            OPTIONS
+                "APPROVAL_TESTS_BUILD_TESTING OFF"
+                "APPROVAL_TESTS_BUILD_EXAMPLES OFF"
+                "APPROVAL_TESTS_BUILD_DOCS OFF"
+                "APPROVAL_TESTS_ENABLE_CODE_COVERAGE OFF"
+                "APPROVAL_TESTS_BUILD_THIRD_PARTY_CATCH2 OFF"
+                "APPROVAL_TESTS_BUILD_THIRD_PARTY_DOCTEST OFF"
+                "APPROVAL_TESTS_BUILD_THIRD_PARTY_UT OFF"
+    )
+
+    # Third-party headers: consumers include them as system headers, so our /W4 doesn't report their warnings
+    # (e.g. C4324 in rapidcheck/detail/Variant.h on x86).
+    set_target_properties(rapidcheck ApprovalTests PROPERTIES SYSTEM TRUE)
 endif ()
 
 if (UNREALLIB_BUILD_TESTS AND UNREALLIB_BUILD_DIFFERENTIAL)

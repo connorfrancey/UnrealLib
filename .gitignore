@@ -28,7 +28,11 @@ CMakeUserPresets.json
 compile_commands.json
 *.log
 
-# Local settings of scripts/manage.py
+# Local settings of uelib.py
+.uelib.json
 .manage.json
 __pycache__/
 .idea/discord.xml
+
+# ApprovalTests: output of a failed approval (approved files are committed)
+*.received.*

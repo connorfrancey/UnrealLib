@@ -475,4 +475,65 @@ namespace UnrealLib
                             static_cast<std::uint64_t>(object.export_entry().serial_offset));
         return read_object_header(reader, *input);
     }
+
+    ObjectProperties Linker::read_properties(ObjectRef object, const PropertySchema* schema)
+    {
+        const auto input = header_input(object);
+        if (!input)
+        {
+            const Resolution& cls = class_of(object);
+            throw Error(ErrorCode::NotFound,
+                fmt::format("cannot determine the class hierarchy of '{}' (class {}: {})", qualified_path(object),
+                            to_string(cls.status), cls.detail));
+        }
+        const auto data = object.package->export_data(object.index.export_index());
+        BinaryReader reader(data, object.package->context(),
+                            static_cast<std::uint64_t>(object.export_entry().serial_offset));
+        ObjectProperties result;
+        result.header = read_object_header(reader, *input);
+        if (!input->is_class)
+        {
+            PropertyReadOptions options;
+            options.names = &object.package->names();
+            options.schema = schema;
+            options.owner = object.package->class_name(object.index);
+            options.diagnostics = &result.diagnostics;
+            result.properties = UnrealLib::read_properties(reader, options);
+        }
+        result.end_offset = reader.position();
+        return result;
+    }
+
+    FieldObject Linker::read_field(ObjectRef object, const PropertySchema* schema)
+    {
+        if (!object.is_export())
+        {
+            throw Error(ErrorCode::InvalidArgument, "read_field() requires an export reference");
+        }
+        const Package& package = *object.package;
+        PropertyType property_type = PropertyType::Unknown;
+        const std::string class_name = package.class_name(object.index);
+        const auto kind = field_kind_of(class_name, &property_type);
+        if (!kind)
+        {
+            throw Error(ErrorCode::InvalidArgument,
+                        fmt::format("'{}' (class {}) is not a reflection object", qualified_path(object), class_name));
+        }
+        const auto input = header_input(object);
+        if (!input)
+        {
+            throw Error(ErrorCode::NotFound,
+                        fmt::format("cannot determine the class hierarchy of '{}'", qualified_path(object)));
+        }
+        const auto data = package.export_data(object.index.export_index());
+        BinaryReader reader(data, package.context(), static_cast<std::uint64_t>(object.export_entry().serial_offset));
+        FieldReadOptions options;
+        options.names = &package.names();
+        options.cooked = (package.summary().package_flags & PackageFlag::Cooked) != 0;
+        options.console_cooked = options.cooked && (package.profile().platform == Platform::Xbox360 ||
+                                                    package.profile().platform == Platform::PS3);
+        options.owner_name = package.object_name(object.index);
+        options.schema = schema;
+        return UnrealLib::read_field(reader, *kind, property_type, *input, options);
+    }
 }

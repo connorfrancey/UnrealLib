@@ -14,61 +14,15 @@
 #include <UnrealLib/Serialization/BinaryReader.hpp>
 #include <UnrealLib/Utilities/Text.hpp>
 
+#include "Support/FixtureSupport.hpp"
+
 using namespace UnrealLib;
 namespace fs = std::filesystem;
 
+using namespace UnrealLib::TestSupport;
+
 namespace
 {
-    std::string env(const char* name)
-    {
-#ifdef _MSC_VER
-        char* value = nullptr;
-        std::size_t length = 0;
-        if (_dupenv_s(&value, &length, name) != 0 || value == nullptr)
-        {
-            return {};
-        }
-        std::string result(value);
-        std::free(value);
-        return result;
-#else
-        const char* value = std::getenv(name);
-        return value ? std::string(value) : std::string();
-#endif
-    }
-
-    fs::path fixture_dir()
-    {
-        const std::string value = env("UNREALLIB_MIRRORSEDGE_DIR");
-        return fs::path(std::u8string(value.begin(), value.end()));
-    }
-
-    bool fixtures_available()
-    {
-        return !fixture_dir().empty() && fs::is_directory(fixture_dir());
-    }
-
-    std::vector<fs::path> packages(bool recursive)
-    {
-        std::vector<fs::path> out;
-        auto consider = [&](const fs::directory_entry& e) {
-            const std::string ext = Text::to_lower_ascii(e.path().extension().string());
-            if (e.is_regular_file() && (recursive ? (ext == ".u" || ext == ".upk" || ext == ".me1") : ext == ".u"))
-            {
-                out.push_back(e.path());
-            }
-        };
-        if (recursive)
-        {
-            for (const auto& e : fs::recursive_directory_iterator(fixture_dir())) consider(e);
-        }
-        else
-        {
-            for (const auto& e : fs::directory_iterator(fixture_dir())) consider(e);
-        }
-        return out;
-    }
-
     // UE3 property type names that may appear in a property tag's type field.
     bool is_property_type(std::string_view type)
     {

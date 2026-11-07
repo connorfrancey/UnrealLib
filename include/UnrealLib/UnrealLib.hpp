@@ -38,4 +38,12 @@
 #include <UnrealLib/Objects/ObjectFlags.hpp>
 #include <UnrealLib/Objects/ObjectHeader.hpp>
 
+#include <UnrealLib/Properties/PropertyTag.hpp>
+#include <UnrealLib/Properties/PropertyValue.hpp>
+
+#include <UnrealLib/Bytecode/Bytecode.hpp>
+
+#include <UnrealLib/Reflection/Fields.hpp>
+
 #include <UnrealLib/Linker/Linker.hpp>
+#include <UnrealLib/Linker/ReflectionSchema.hpp>

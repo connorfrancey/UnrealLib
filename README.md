@@ -3,11 +3,12 @@
 A native C++20 library for reading Unreal Engine 3 packages, ported from the behaviour of
 [UELib](https://github.com/EliotVU/Unreal-Library) (C#). The first target is **Mirror's Edge (2008), PC**.
 
-> **Status: early (milestones M0–M3).** Package summaries, compression, name/import/export/depends tables, game
-> profiles, structural validation, cross-package import resolution and UObject headers are implemented and verified
-> against all 2,426 packages of the Mirror's Edge PC release, and against upstream UELib (differential tests).
-> Property deserialization, UnrealScript bytecode/decompilation, asset extraction, T3D and package writing are **not
-> implemented yet** — see [docs/development.md](docs/development.md#milestones).
+> **Status: early (milestones M0–M5).** Package summaries, compression, name/import/export/depends tables, game
+> profiles, structural validation, cross-package import resolution, UObject headers, tagged script properties (typed
+> values, structs, arrays, byte-exact rewriting), reflection objects and UnrealScript bytecode decoding are implemented
+> and verified against all 2,426 packages of the Mirror's Edge PC release; the tables also against upstream UELib
+> (differential tests). Decompilation, asset extraction, T3D and package writing are **not implemented yet** — see
+> [docs/development.md](docs/development.md#milestones).
 
 ## Features
 
@@ -20,6 +21,10 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
 * Structural validation (offsets, references, outer cycles, overlapping export data).
 * `Linker`: package search paths, lazy loading, import resolution across packages (including seek-free forced
   exports), class hierarchy queries, UObject header parsing.
+* Script properties: property tags, typed values (structs, arrays, enums, names, objects, delegates), lossless
+  rewriting, type information from the game's own script packages (`ReflectionSchema`).
+* Reflection objects (`UClass`, `UStruct`, `UFunction`, `UState`, `UEnum`, `UConst`, properties, text buffers) and an
+  UnrealScript bytecode decoder with the Mirror's Edge token map.
 * Differential tests against upstream C# UELib (opt-in, needs the .NET SDK).
 * Tools: `UnrealPackageInspector` (text or normalized JSON) and `UnrealPackageValidator`.
 
@@ -27,7 +32,7 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
 
 With [uv](https://docs.astral.sh/uv/) installed, `./build.sh` (Linux/macOS/Git Bash), `build.bat` (cmd) or
 `./build.ps1` (PowerShell) opens an interactive menu (configure, build, test, clean, docs, tools); `build.bat all`
-configures, builds and tests the default preset. The wrappers run `scripts/manage.py`, which sets up the Visual C++
+configures, builds and tests the default preset. The wrappers run `uelib.py`, which sets up the Visual C++
 environment itself. See
 [docs/development.md](docs/development.md#project-manager-script). Plain CMake works as well:
 
@@ -83,7 +88,7 @@ Tests, tools and examples are off by default for consumers; only fmt, spdlog and
 ## Dependencies
 
 All fetched with [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake), versions pinned in `cmake/Versions.cmake`:
-fmt, spdlog, zlib (runtime); nlohmann/json, CLI11 (tools); GoogleTest (tests); Google Benchmark (optional).
+fmt, spdlog, zlib (runtime); nlohmann/json, CLI11 (tools); GoogleTest, RapidCheck, ApprovalTests.cpp (tests); Google Benchmark (optional).
 
 ## Legal
 

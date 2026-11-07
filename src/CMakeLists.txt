@@ -1,6 +1,6 @@
 # ----------------------------------------------------------------------------------------------------------------------
 # UnrealLib modules. Dependency order (no cycles):
-#   Core -> Utilities -> Serialization -> Names -> Package -> Objects -> Linker
+#   Core -> Utilities -> Serialization -> Names -> Package -> Objects, Properties -> Linker
 # Sources are listed explicitly; add new files here when a module grows.
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -62,12 +62,36 @@ unreallib_add_module(Objects
         PUBLIC_DEPS
             UnrealLib::Package)
 
+unreallib_add_module(Properties
+        SOURCES
+            Properties/PropertyTag.cpp
+            Properties/PropertyValue.cpp
+        PUBLIC_DEPS
+            UnrealLib::Package)
+
+unreallib_add_module(Bytecode
+        SOURCES
+            Bytecode/Bytecode.cpp
+        PUBLIC_DEPS
+            UnrealLib::Package)
+
+unreallib_add_module(Reflection
+        SOURCES
+            Reflection/Fields.cpp
+        PUBLIC_DEPS
+            UnrealLib::Objects
+            UnrealLib::Properties
+            UnrealLib::Bytecode)
+
 unreallib_add_module(Linker
         SOURCES
             Linker/Linker.cpp
+            Linker/ReflectionSchema.cpp
         PUBLIC_DEPS
             UnrealLib::Objects
-            UnrealLib::Package)
+            UnrealLib::Package
+            UnrealLib::Properties
+            UnrealLib::Reflection)
 
 # Umbrella target: link this to get the whole library.
 add_library(unreallib INTERFACE)
@@ -79,4 +103,7 @@ target_link_libraries(unreallib INTERFACE
         UnrealLib::Names
         UnrealLib::Package
         UnrealLib::Objects
+        UnrealLib::Properties
+        UnrealLib::Bytecode
+        UnrealLib::Reflection
         UnrealLib::Linker)

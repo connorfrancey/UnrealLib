@@ -6,12 +6,14 @@ include(GoogleTest)
 
 add_library(unreallib_test_support STATIC
         Support/SyntheticPackage.cpp
-        Support/SyntheticPackage.hpp)
+        Support/SyntheticPackage.hpp
+        Support/FixtureSupport.hpp)
 target_include_directories(unreallib_test_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(unreallib_test_support PUBLIC UnrealLib::UnrealLib)
 unreallib_set_compiler_options(unreallib_test_support)
 
 add_executable(UnrealLibTests
+        Support/TestMain.cpp
         Unit/Core/CoreTests.cpp
         Unit/Utilities/TextTests.cpp
         Unit/Serialization/ArchiveTests.cpp
@@ -21,22 +23,28 @@ add_executable(UnrealLibTests
         Unit/Serialization/CompactIndexTests.cpp
         Unit/Serialization/CompressionTests.cpp
         Unit/Serialization/FStringTests.cpp
+        Unit/Serialization/PropertyBasedTests.cpp
         Unit/Names/NameTableTests.cpp
         Unit/Package/GameProfileTests.cpp
         Unit/Package/PackageLoadingTests.cpp
         Unit/Package/PackageSummaryTests.cpp
         Unit/Objects/ObjectHeaderTests.cpp
+        Unit/Properties/PropertyTests.cpp
         Unit/Linker/LinkerTests.cpp
         Fuzz/MutationTests.cpp
         Integration/MirrorsEdgeFixtureTests.cpp
-        Integration/MirrorsEdgeLinkerTests.cpp)
+        Integration/MirrorsEdgeLinkerTests.cpp
+        Integration/MirrorsEdgePropertyTests.cpp
+        Integration/MirrorsEdgeReflectionTests.cpp
+        Regression/ApprovalRegressionTests.cpp)
 
 target_link_libraries(UnrealLibTests PRIVATE
         unreallib_test_support
         UnrealLib::UnrealLib
         GTest::gtest
         GTest::gmock
-        GTest::gtest_main)
+        rapidcheck_gtest
+        ApprovalTests::ApprovalTests)   # main() is Support/TestMain.cpp (GoogleTest + ApprovalTests)
 unreallib_set_compiler_options(UnrealLibTests)
 
 set(_unreallib_test_env "")

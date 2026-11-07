@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <UnrealLib/Serialization/ByteOrder.hpp>
@@ -55,6 +56,9 @@ namespace UnrealLib
         std::vector<std::int32_t> cooker_versions;     ///< Cooker versions seen in this game's packages.
         Endian endian = Endian::Little;                ///< Byte order of the game's packages.
         std::vector<CompressionMethod> compression_methods; ///< Compression methods the game uses.
+        /// Bytecode opcode reassignments relative to the version's default UE3 token map, as (opcode, token name)
+        /// pairs; token names are those of `UnrealLib::to_string(TokenKind)` (e.g. {0x4F, "Unresolved"}).
+        std::vector<std::pair<std::uint8_t, std::string>> bytecode_overrides;
         bool verified = false; ///< Whether the profile has been verified against real game packages.
         std::string notes;     ///< Provenance of the values.
     };

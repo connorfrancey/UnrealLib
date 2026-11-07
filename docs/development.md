@@ -9,8 +9,8 @@
 
 ## Project manager script
 
-`scripts/manage.py` wraps the common tasks. It is a single-file [uv](https://docs.astral.sh/uv/) script (PEP 723
-inline metadata, dependencies locked in `scripts/manage.py.lock`): `uv run` installs click, rich and questionary into a
+`uelib.py` wraps the common tasks. It is a single-file [uv](https://docs.astral.sh/uv/) script (PEP 723
+inline metadata, dependencies locked in `uelib.py.lock`): `uv run` installs click, rich and questionary into a
 cached, isolated environment — no virtualenv to manage.
 
 Root-level wrappers forward all arguments to it and return its exit code: `build.sh` (POSIX sh: Linux, macOS, Git
@@ -18,27 +18,32 @@ Bash), `build.bat` (cmd) and `build.ps1` (PowerShell). They keep the caller's wo
 work, and print installation instructions when uv is missing. The examples below work the same with `build.bat …`.
 
 ```powershell
-uv run scripts/manage.py                      # interactive menu (questionary)
-uv run scripts/manage.py doctor               # check tools, Visual Studio installations, fixtures
-uv run scripts/manage.py config set default_preset msvc-x64-debug
-uv run scripts/manage.py config set mirrorsedge_dir "C:/…/mirrors edge/TdGame/CookedPC"
-uv run scripts/manage.py all                  # configure + build + test (default preset)
-uv run scripts/manage.py build msvc-x86-release -t unreallib_package_inspector
-uv run scripts/manage.py test clang-cl-x64-asan -R Linker
-uv run scripts/manage.py test --sweep         # include the full-corpus sweeps
-uv run scripts/manage.py configure --differential   # enable differential tests vs. upstream UELib
-uv run scripts/manage.py docs --open
-uv run scripts/manage.py tool inspector Core.u --exports --limit 20
-uv run scripts/manage.py clean msvc-x86-release     # or --all; only ever deletes build/<preset>
+uv run uelib.py                      # interactive menu (questionary)
+uv run uelib.py doctor               # check tools, Visual Studio installations, fixtures
+uv run uelib.py config set default_preset msvc-x64-debug
+uv run uelib.py config set mirrorsedge_dir "C:/…/mirrors edge/TdGame/CookedPC"
+uv run uelib.py all                  # configure + build + test (default preset)
+uv run uelib.py build msvc-x86-release -t unreallib_package_inspector
+uv run uelib.py test clang-cl-x64-asan -R Linker
+uv run uelib.py test --sweep         # include the full-corpus sweeps
+uv run uelib.py test --no-log        # don't write build/logs/<preset>/ (see below)
+uv run uelib.py configure --differential   # enable differential tests vs. upstream UELib
+uv run uelib.py docs --open
+uv run uelib.py tool inspector Core.u --exports --limit 20
+uv run uelib.py clean msvc-x86-release     # or --all; only ever deletes build/<preset>
 ```
 
 * **No Developer Prompt needed.** The script finds Visual Studio with `vswhere`, runs `vcvarsall.bat` for the preset's
-  architecture and caches the resulting environment (`build/.manage-cache`).
+  architecture and caches the resulting environment (`build/.uelib-cache`).
 * **Several Visual Studio installations.** A build tree keeps the installation it was configured with (recorded in
-  `build/<preset>/.manage-vs`, or inferred from the compiler path in `CMakeCache.txt`), so existing trees never switch
+  `build/<preset>/.uelib-vs` (older trees: `.manage-vs`), or inferred from the compiler path in `CMakeCache.txt`), so existing trees never switch
   toolsets. New trees use the `vs_installation` setting, or the newest installation.
-* Settings live in `.manage.json` (git-ignored): `default_preset`, `mirrorsedge_dir`, `jobs`, `vs_installation`.
-* To update the pinned dependencies: edit the script header, then `uv lock --script scripts/manage.py`.
+* **Test logs.** Every `test` (and `all`) run writes `build/logs/<preset>/test-<yyyymmdd-hhmmss>.log`, CTest's
+  console output, and a `.xml` JUnit report with every test's own output (the corpus sweeps' statistics included, even
+  when they pass). The newest run is also copied to `latest.log`/`latest.xml`; the last 20 runs per preset are kept.
+  Logs are written for failed runs too, and CTest runs with `--output-on-failure`. `--no-log` turns this off.
+* Settings live in `.uelib.json` (git-ignored): `default_preset`, `mirrorsedge_dir`, `jobs`, `vs_installation`.
+* To update the pinned dependencies: edit the script header, then `uv lock --script uelib.py`.
 
 ## Building
 
@@ -100,12 +105,24 @@ All public headers use Doxygen comments (`///`, `@brief`, `@param`, `@throws`).
 
 ## Testing
 
-GoogleTest only (with GoogleMock available). Tests are discovered by CTest via `gtest_discover_tests`.
+GoogleTest is the test framework (with GoogleMock available); tests are discovered by CTest via
+`gtest_discover_tests`. Two GoogleTest add-ons, both test-only dependencies:
+
+* **RapidCheck** (property-based testing): `RC_GTEST_PROP` tests run as ordinary GoogleTest tests on generated inputs
+  and shrink a failure to a minimal counterexample. 100 cases per property by default; `RC_PARAMS="max_success=5000"`
+  runs more, and `RC_PARAMS="seed=<n>"` (printed on failure) reproduces a failing run.
+* **ApprovalTests.cpp** (golden master): `ApprovalTests::Approvals::verify(text)` compares output with a committed
+  `approved/<File>.<Suite>.<Test>.approved.txt`. A mismatch prints a text diff (no GUI diff tool is launched) and
+  writes a `.received.txt` file next to it (git-ignored); if the change is intended, rename it to `.approved.txt`
+  and commit it. The test executable's `main()` is `tests/Support/TestMain.cpp`, which registers the approval
+  listener with GoogleTest.
 
 | Directory | Contents |
 |-----------|----------|
 | `tests/Unit/*` | per-module unit tests, parameterized where values are tabular (CompactIndex encodings, SerializeInt maxima, version gates) |
 | `tests/Support` | `SyntheticPackage`: builds valid UE3 packages in memory (optionally zlib-compressed, any block size) |
+| `tests/Unit/Serialization/PropertyBasedTests.cpp` | RapidCheck properties: round trips (integers, float bit patterns, both byte orders, CompactIndex, FString, bit streams, property tags) and totality on arbitrary bytes |
+| `tests/Regression` | approval tests: token maps, synthetic package bytes and listing, property formatting (`approved/`) |
 | `tests/Fuzz` | deterministic mutation testing of the loader (must only ever throw `UnrealLib::Error`) |
 | `tests/Integration` | real Mirror's Edge fixtures (skipped unless `UNREALLIB_MIRRORSEDGE_DIR` is set) |
 | `tests/Differential` | UnrealLib vs. upstream C# UELib (opt-in, needs the .NET SDK) |
@@ -186,8 +203,8 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 | M1 | Core, Serialization (reader/writer, bits, CompactIndex, FString, archives, limits, compression) | **done** |
 | M2 | Summary, names, imports, exports, depends, profiles, decompression, validation, tools | **done** (verified on 2426 packages) |
 | M3 | Linker (cross-package import resolution, search paths, cycles), class hierarchy (`is_a`), UObject header | **done** (verified on 2426 packages); typed object model continues in M4/M5 |
-| M4 | Property tags, typed property values, struct/array/map, unknown-property preservation | |
-| M5 | Reflection (`UField`/`UStruct`/`UClass`/`UFunction`/`UState`/`UEnum`/`UConst`), bytecode decoder + IR | |
+| M4 | Property tags, typed property values, struct/array/map, unknown-property preservation | **done** (verified on 2426 packages: 9,656,419 properties, byte-exact round trip; with `ReflectionSchema` every one of 1,639,154 arrays decodes). `MapProperty` values are kept as raw bytes |
+| M5 | Reflection (`UField`/`UStruct`/`UClass`/`UFunction`/`UState`/`UEnum`/`UConst`), bytecode decoder + IR | **done** (verified on 2426 packages: every reflection export consumes its data exactly; 13,770 scripts / 477,343 tokens end exactly at ScriptSize) |
 | M6 | Decompiler (expressions, control flow, UnrealScript output) | |
 | M7 | Assets (textures first, then sound, meshes, materials, animation) + PackageExtractor | |
 | M8 | T3D, package writer, LZO compression | |
@@ -195,18 +212,22 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 
 ### Next concrete tasks
 
-1. M4: property tags for version 536 (`RefactoredPropertyTags` and related gates), typed property values, unknown
-   property preservation. Verification target: every export's property list parses to its terminating `None` tag and
-   ends exactly at the end of the serialized data (or where class-specific data begins) across the corpus — the
-   object-header invariant used in M3 already shows that every export's first property tag is well formed.
-2. M5: UField/UStruct/UClass/UFunction/UState/UEnum/UConst serialization (the data after a UClass header), bytecode
-   decoder with the Mirror's Edge token map (`0x4F` unresolved, 16-bit struct-member property type).
-3. libFuzzer harness (clang-cl) and benchmarks for LZO decode, table parsing and import resolution.
+1. M6: decompiler on top of the decoded token tree — expression reconstruction, statements, control flow (jumps,
+   loops, switch), UnrealScript output for functions, states and classes. Verification target: every script of the
+   corpus decompiles without placeholders, checked against upstream UELib's output (differential).
+2. Differential tests for M4/M5: compare property values and bytecode tokens with upstream UELib, not only the tables.
+3. Decode `MapProperty` values (kept raw today) once a fixture shows their layout.
+4. libFuzzer harness (clang-cl) and benchmarks for LZO decode, table parsing, import resolution and property parsing.
 
 ## Known limitations
 
-* Objects are parsed up to the UObject header (state frame, component template, NetIndex). Script properties,
-  UField/UStruct/UClass data, bytecode and assets are not deserialized yet; export payloads are available as raw bytes.
+* Objects are parsed up to and including their tagged script properties, and reflection objects (classes, structs,
+  functions, states, enums, consts, properties, text buffers) completely, bytecode included. Class-specific native
+  data after the properties (textures, meshes, sounds, levels, ...) is not deserialized yet: it is available as the
+  export's remaining raw bytes.
+* Without a `ReflectionSchema`, only the built-in Core math structs are known: arrays and script-declared structs
+  are kept as raw bytes (losslessly). Pass a `ReflectionSchema` over the game's script packages to decode them all.
+* `MapProperty` values are kept as raw bytes. Bytecode is decoded into a token tree; there is no decompiler yet (M6).
 * Intrinsic (native-only) classes are recognised by rule — an unexported `Core.Class` import — not from a list; their
   super chain is unknown (`Linker::is_a` returns std::nullopt for them, except "is not a Core.Component").
 * File versions < 249 and ≥ 767, UE4/UE5, and LZX compression are rejected.
@@ -216,5 +237,5 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 * No package writing yet beyond the per-structure writers (summary, names, imports, exports).
 * No install rules / CMake package config yet.
 * Differential comparison against upstream UELib covers the package summary and the name/import/export/depends
-  tables only (that is all UnrealLib parses so far). Upstream cannot read compressed packages' tables, so for the 1553
+  tables only; property values, reflection data and bytecode are verified by UnrealLib's own corpus sweeps. Upstream cannot read compressed packages' tables, so for the 1553
   compressed packages the tables are verified only by UnrealLib's own fixture tests.

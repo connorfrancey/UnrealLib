@@ -18,6 +18,8 @@
 #include <UnrealLib/Core/Diagnostics.hpp>
 #include <UnrealLib/Objects/ObjectHeader.hpp>
 #include <UnrealLib/Package/Package.hpp>
+#include <UnrealLib/Properties/PropertyValue.hpp>
+#include <UnrealLib/Reflection/Fields.hpp>
 #include <UnrealLib/Utilities/Text.hpp>
 
 namespace UnrealLib
@@ -71,6 +73,15 @@ namespace UnrealLib
             return status == ResolveStatus::Null || status == ResolveStatus::Export ||
                    status == ResolveStatus::Package || status == ResolveStatus::Intrinsic;
         }
+    };
+
+    /// @brief The script properties of an export (see Linker::read_properties()).
+    struct ObjectProperties
+    {
+        ObjectHeader header;                ///< UObject header preceding the properties.
+        std::vector<Property> properties;   ///< Tagged properties.
+        std::size_t end_offset = 0;         ///< Offset just past the "None" tag, relative to the export data.
+        Diagnostics diagnostics;            ///< Values that could not be decoded ("property.raw-value").
     };
 
     /// @brief Resolves references across a set of packages.
@@ -145,6 +156,20 @@ namespace UnrealLib
         /// @brief Reads the UObject header of export @p object.
         /// @throws Error (NotFound) if the class hierarchy cannot be determined; SerializationError on bad data.
         [[nodiscard]] ObjectHeader read_header(ObjectRef object);
+
+        /// @brief Reads the UObject header and the tagged script properties of export @p object.
+        ///
+        /// The property owner is the export's class name. Class exports (null class) have no tagged properties: the
+        /// result then holds only the header and `end_offset == header.properties_offset`.
+        /// @param schema Type information (nullptr: BuiltinPropertySchema).
+        /// @throws Error (NotFound) if the class hierarchy cannot be determined; SerializationError on bad tags.
+        [[nodiscard]] ObjectProperties read_properties(ObjectRef object, const PropertySchema* schema = nullptr);
+
+        /// @brief Reads the reflection data of export @p object (class, state, function, struct, enum, const,
+        ///        property or text buffer).
+        /// @param schema Type information for struct default properties (nullptr: BuiltinPropertySchema).
+        /// @throws Error (InvalidArgument) if the export is not a reflection object; SerializationError on bad data.
+        [[nodiscard]] FieldObject read_field(ObjectRef object, const PropertySchema* schema = nullptr);
 
         /// @brief Load failures and search-path warnings.
         [[nodiscard]] const Diagnostics& diagnostics() const noexcept { return m_diagnostics; }
