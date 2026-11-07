@@ -63,7 +63,7 @@ Presets: `msvc-x64-debug`, `msvc-x64-release`, `msvc-x86-debug`, `msvc-x86-relea
 |--------|---------|---------|
 | `UNREALLIB_BUILD_TESTS` | top-level | GoogleTest suite |
 | `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator`, `UnrealScriptDecompiler`, `UnrealPackageExtractor`, `UnrealT3DImporter` |
-| `UNREALLIB_BUILD_EXAMPLES` | top-level | examples |
+| `UNREALLIB_BUILD_EXAMPLES` | top-level | `examples/`: `LoadPackage` (summary, exports, validation), `InspectObjects` (properties, decompiled functions/classes), `ExtractTexture` (texture → PNG) |
 | `UNREALLIB_BUILD_BENCHMARKS` | OFF | `UnrealLibBenchmarks` (Google Benchmark; see *Benchmarks* below) |
 | `UNREALLIB_BUILD_FUZZERS` | OFF | libFuzzer executables (clang/clang-cl; use preset `clang-cl-x64-fuzz`) |
 | `UNREALLIB_BUILD_DOCS` | OFF | `unreallib_docs` Doxygen target |
