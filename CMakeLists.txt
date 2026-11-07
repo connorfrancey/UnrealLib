@@ -21,6 +21,7 @@ include(Ccache) # before any target (including CPM dependencies) is created
 include(CompilerOptions)
 include(Dependencies)
 include(AddUnrealLibModule)
+include(GNUInstallDirs)
 
 # Generated headers (version information).
 set(UNREALLIB_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/generated/include")
@@ -42,6 +43,10 @@ endif ()
 
 if (UNREALLIB_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif ()
+
+if (UNREALLIB_INSTALL)
+    include(Install)
 endif ()
 
 if (UNREALLIB_BUILD_DOCS)

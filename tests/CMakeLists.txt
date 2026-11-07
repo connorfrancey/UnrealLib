@@ -125,3 +125,20 @@ if (UNREALLIB_BUILD_DIFFERENTIAL)
         gtest_discover_tests(UnrealLibDifferentialTests DISCOVERY_MODE PRE_TEST TEST_PREFIX "Differential.")
     endif ()
 endif ()
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Install + find_package(UnrealLib) smoke test: installs into the build tree and builds tests/Install/Consumer.
+# ----------------------------------------------------------------------------------------------------------------------
+if (UNREALLIB_INSTALL)
+    add_test(NAME Install.Consumer
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DBINARY_DIR=${PROJECT_BINARY_DIR}"
+                     "-DCONFIG=$<CONFIG>"
+                     "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Install/Consumer"
+                     "-DWORK_DIR=${PROJECT_BINARY_DIR}/install-test"
+                     "-DGENERATOR=${CMAKE_GENERATOR}"
+                     "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                     "-DEXPECTED_VERSION=${PROJECT_VERSION}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/Install/RunConsumerTest.cmake")
+    set_tests_properties(Install.Consumer PROPERTIES LABELS "install" TIMEOUT 600)
+endif ()

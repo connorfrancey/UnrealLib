@@ -16,6 +16,8 @@ option(UNREALLIB_ENABLE_ASAN "Build with AddressSanitizer where supported" OFF)
 option(UNREALLIB_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(UNREALLIB_BUILD_DIFFERENTIAL "Build differential tests against upstream C# UELib (requires the .NET SDK)" OFF)
 option(UNREALLIB_DIFFERENTIAL_RECURSIVE "Differential tests cover every package below UNREALLIB_MIRRORSEDGE_DIR" OFF)
+option(UNREALLIB_INSTALL "Generate install rules and the UnrealLib CMake package (installs fmt, spdlog and zlib too)"
+       ${PROJECT_IS_TOP_LEVEL})
 option(UNREALLIB_USE_CCACHE "Compile through ccache when it is installed" ${PROJECT_IS_TOP_LEVEL})
 
 # Optional directory containing legally obtained Mirror's Edge PC packages (e.g. ".../mirrors edge/TdGame/CookedPC").

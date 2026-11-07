@@ -85,6 +85,19 @@ target_link_libraries(my_tool PRIVATE UnrealLib::UnrealLib)
 
 Tests, tools and examples are off by default for consumers; only fmt, spdlog and zlib are pulled in.
 
+Or install it and use the exported package:
+
+```sh
+cmake --install build/msvc-x64-release --prefix <prefix>
+```
+
+```cmake
+find_package(UnrealLib 0.1 CONFIG REQUIRED)   # with <prefix> in CMAKE_PREFIX_PATH
+target_link_libraries(my_tool PRIVATE UnrealLib::UnrealLib)
+```
+
+See [docs/development.md](docs/development.md#installing-and-find_packageunreallib).
+
 ## Documentation
 
 * [Architecture & upstream inventory](docs/architecture.md)

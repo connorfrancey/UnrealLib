@@ -1,0 +1,19 @@
+# UnrealLib CMake package.
+#
+#   find_package(UnrealLib 0.1 CONFIG REQUIRED)
+#   target_link_libraries(app PRIVATE UnrealLib::UnrealLib)   # or individual modules, e.g. UnrealLib::Package
+#
+# Modules: Core Utilities Serialization Names Package Objects Properties Bytecode Reflection Linker Decompiler Assets
+#          Writer T3D
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+# Installed next to UnrealLib by its install rules (same prefix); CONFIG avoids picking up a different system zlib.
+find_dependency(fmt CONFIG)
+find_dependency(spdlog CONFIG)
+find_dependency(ZLIB CONFIG COMPONENTS static) # static-only zlib build: ZLIB::ZLIBSTATIC
+
+include("${CMAKE_CURRENT_LIST_DIR}/UnrealLibTargets.cmake")
+
+check_required_components(UnrealLib)

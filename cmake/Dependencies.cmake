@@ -23,13 +23,14 @@ message(STATUS "UnrealLib: resolving dependencies through CPM.cmake")
 # Runtime dependencies (always required)
 # ----------------------------------------------------------------------------------------------------------------------
 
+# With UNREALLIB_INSTALL, fmt, spdlog and zlib install themselves next to UnrealLib (its static libraries need them).
 # fmt must come before spdlog so spdlog uses this copy (SPDLOG_FMT_EXTERNAL) instead of its bundled one.
 CPMAddPackage(
         NAME fmt
         GITHUB_REPOSITORY fmtlib/fmt
         GIT_TAG ${FMT_TAG}
         OPTIONS
-            "FMT_INSTALL OFF"
+            "FMT_INSTALL ${UNREALLIB_INSTALL}"
             "FMT_TEST OFF"
             "FMT_DOC OFF"
             "FMT_MODULE OFF"
@@ -41,7 +42,7 @@ CPMAddPackage(
         GIT_TAG ${SPDLOG_TAG}
         OPTIONS
             "SPDLOG_FMT_EXTERNAL ON"
-            "SPDLOG_INSTALL OFF"
+            "SPDLOG_INSTALL ${UNREALLIB_INSTALL}"
             "SPDLOG_BUILD_EXAMPLE OFF"
             "SPDLOG_BUILD_TESTS OFF"
             "SPDLOG_BUILD_BENCH OFF"
@@ -56,7 +57,7 @@ CPMAddPackage(
             "ZLIB_BUILD_TESTING OFF"
             "ZLIB_BUILD_SHARED OFF"
             "ZLIB_BUILD_STATIC ON"
-            "ZLIB_INSTALL OFF"
+            "ZLIB_INSTALL ${UNREALLIB_INSTALL}"
 )
 
 # zlib >= 1.4 exports ZLIB::ZLIBSTATIC for the static build; older/system zlib exports ZLIB::ZLIB.
@@ -69,12 +70,14 @@ else ()
 endif ()
 
 # ----------------------------------------------------------------------------------------------------------------------
-# Tool / test dependencies (only fetched when needed)
+# Tool / test dependencies (only fetched when needed). EXCLUDE_FROM_ALL keeps them out of `install` (and out of the
+# default build except where a target links them).
 # ----------------------------------------------------------------------------------------------------------------------
 
 if (UNREALLIB_BUILD_TOOLS OR UNREALLIB_BUILD_TESTS)
     CPMAddPackage(
             NAME nlohmann_json
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY nlohmann/json
             GIT_TAG ${JSON_TAG}
             OPTIONS
@@ -86,6 +89,7 @@ endif ()
 if (UNREALLIB_BUILD_TOOLS)
     CPMAddPackage(
             NAME CLI11
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY CLIUtils/CLI11
             GIT_TAG ${CLI11_TAG}
             OPTIONS
@@ -100,6 +104,7 @@ endif ()
 if (UNREALLIB_BUILD_TESTS)
     CPMAddPackage(
             NAME googletest
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY google/googletest
             GIT_TAG ${GOOGLETEST_TAG}
             OPTIONS
@@ -111,6 +116,7 @@ if (UNREALLIB_BUILD_TESTS)
     # Property-based testing (RC_GTEST_PROP): generated inputs with shrinking, run as ordinary GoogleTest tests.
     CPMAddPackage(
             NAME rapidcheck
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY emil-e/rapidcheck
             GIT_TAG ${RAPIDCHECK_TAG}
             OPTIONS
@@ -128,6 +134,7 @@ if (UNREALLIB_BUILD_TESTS)
     # Uses our GoogleTest; its own tests, examples and bundled third-party frameworks are off.
     CPMAddPackage(
             NAME ApprovalTests
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY approvals/ApprovalTests.cpp
             GIT_TAG ${APPROVALTESTS_TAG}
             OPTIONS
@@ -158,6 +165,7 @@ endif ()
 if (UNREALLIB_BUILD_BENCHMARKS)
     CPMAddPackage(
             NAME benchmark
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY google/benchmark
             GIT_TAG ${GOOGLEBENCHMARK_TAG}
             OPTIONS

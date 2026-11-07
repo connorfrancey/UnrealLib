@@ -143,6 +143,7 @@ unreallib_add_module(T3D
 # Umbrella target: link this to get the whole library.
 add_library(unreallib INTERFACE)
 add_library(UnrealLib::UnrealLib ALIAS unreallib)
+set_target_properties(unreallib PROPERTIES EXPORT_NAME UnrealLib)
 target_link_libraries(unreallib INTERFACE
         UnrealLib::Core
         UnrealLib::Utilities

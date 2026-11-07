@@ -69,6 +69,7 @@ Presets: `msvc-x64-debug`, `msvc-x64-release`, `msvc-x86-debug`, `msvc-x86-relea
 | `UNREALLIB_USE_CCACHE` | top-level | compile through ccache if found |
 | `UNREALLIB_ENABLE_ASAN` | OFF | AddressSanitizer |
 | `UNREALLIB_WARNINGS_AS_ERRORS` | OFF | `/WX` / `-Werror` |
+| `UNREALLIB_INSTALL` | top-level | install rules and the `UnrealLib` CMake package (also installs fmt, spdlog, zlib) |
 | `UNREALLIB_MIRRORSEDGE_DIR` | empty | CookedPC directory for fixture tests |
 
 ### Using UnrealLib from another project (CPM.cmake)
@@ -84,7 +85,28 @@ target_link_libraries(my_app PRIVATE UnrealLib::UnrealLib)
 As a subproject, tests/tools/examples/ccache default to OFF and only fmt, spdlog and zlib are requested. Dependencies
 are added with CPM by name, so a parent that already added `fmt`, `spdlog` or `zlib` through CPM shares its copy
 (make sure the versions are compatible: see `cmake/Versions.cmake`). `add_subdirectory()` works the same way.
-`install()`/`find_package(UnrealLib)` support is planned for M9.
+
+### Installing and `find_package(UnrealLib)`
+
+```sh
+cmake --build --preset msvc-x64-release
+cmake --install build/msvc-x64-release --prefix C:/sdk/UnrealLib
+cmake --install build/msvc-x64-debug   --prefix C:/sdk/UnrealLib   # optional: Debug libraries get a "d" suffix
+```
+
+```cmake
+find_package(UnrealLib 0.1 CONFIG REQUIRED)            # CMAKE_PREFIX_PATH=C:/sdk/UnrealLib
+target_link_libraries(my_app PRIVATE UnrealLib::UnrealLib) # or single modules: UnrealLib::Package, UnrealLib::T3D, ...
+```
+
+The prefix receives `include/UnrealLib` (with the generated `Version.hpp`), one static library per module
+(`UnrealLib<Module>[d].lib`), `lib/cmake/UnrealLib` (config, version file — `SameMinorVersion` while the version is
+0.x — and exported targets `UnrealLib::<Module>` / `UnrealLib::UnrealLib`), the command-line tools in `bin`, and
+fmt, spdlog and zlib with their own CMake packages (UnrealLib's static libraries link them; the config finds them
+with `find_dependency`). Test, tool and benchmark dependencies are never installed. Install rules are on by default
+only for top-level builds (`UNREALLIB_INSTALL`); a parent project that provides its own fmt/spdlog/zlib without
+their install rules should leave it off. The `Install.Consumer` CTest test installs the build into
+`build/<preset>/install-test`, then configures, builds and runs `tests/Install/Consumer` against it.
 
 ### ccache
 
@@ -126,6 +148,7 @@ GoogleTest is the test framework (with GoogleMock available); tests are discover
 | `tests/Fuzz` | deterministic mutation testing of the loader (must only ever throw `UnrealLib::Error`) |
 | `tests/Integration` | real Mirror's Edge fixtures (skipped unless `UNREALLIB_MIRRORSEDGE_DIR` is set) |
 | `tests/Differential` | UnrealLib vs. upstream C# UELib (opt-in, needs the .NET SDK) |
+| `tests/Install` | `Install.Consumer`: install + `find_package(UnrealLib)` from a separate project |
 
 Fixture tests:
 
@@ -208,7 +231,7 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 | M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
 | M7 | Assets (textures, sound, meshes, materials, animation) + PackageExtractor | **done** (every texture, sound, static/skeletal mesh, animation and material of the game; see [assets.md](assets.md)) |
 | M8 | T3D, package writer, LZO compression | **done** — writer: all 873 uncompressed packages rewritten byte-identically, all 1,553 compressed ones reload with identical tables and export bytes, LZO encoder; T3D: parser/serializer/validation, level export verified on all 680 levels (152,965 actors, 7,958 brushes / 48,103 polygons, 2,880,354 properties, 0 raw values, text round trip exact; see [t3d.md](t3d.md)); T3D import (`import_document`, `parse_property_value`, `UnrealT3DImporter`): every level's unmodified export imports back with 0 changes (338,507 objects), edits round-trip through write → reload → export; brush geometry: `read_polys`/`write_polys` (byte-exact) and `read_model` on all 9,392 Polys/Model exports |
-| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | |
+| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **in progress** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release) |
 
 ### Next concrete tasks
 
@@ -234,7 +257,6 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
   against real console packages, and no built-in profile accepts them.
 * T3D export covers tagged properties, subobjects and brush geometry (not the level BSP tree); T3D import modifies
   existing objects only (no new actors/imports) and does not rebuild BSP (see [t3d.md](t3d.md)).
-* No install rules / CMake package config yet.
 * Differential comparison against upstream UELib covers the package summary and the name/import/export/depends
   tables only; property values, reflection data and bytecode are verified by UnrealLib's own corpus sweeps. Upstream cannot read compressed packages' tables, so for the 1553
   compressed packages the tables are verified only by UnrealLib's own fixture tests.
