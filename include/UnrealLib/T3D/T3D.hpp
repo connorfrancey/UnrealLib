@@ -94,8 +94,8 @@ namespace UnrealLib::T3D
     [[nodiscard]] std::string serialize(const T3DDocument& document, std::string_view indent = "   ");
 
     /// @brief Semantic checks: Actor blocks have Class and Name; sibling blocks have unique names; a Map contains
-    ///        Level blocks; references of the form `Name` or `Class'Name'` to subobjects of the same actor resolve.
-    ///        Problems are reported as warnings ("t3d.*" codes) with their lines.
+    ///        Level blocks; references of the form `Name` or `Class'Name'` to subobjects of the same actor resolve;
+    ///        Polygon blocks have at least 3 `Vertex` lines. Problems are reported as warnings ("t3d.*" codes) with their lines.
     [[nodiscard]] Diagnostics validate(const T3DDocument& document);
 
     /// @brief Options for export_object() / export_level().
@@ -107,7 +107,11 @@ namespace UnrealLib::T3D
 
     /// @brief Exports export @p object as a block of type @p block_type (`Actor` or `Object`): `Class=`, `Name=`
     ///        and `Archetype=` attributes, one `Begin Object` block per subobject (exports whose outer is the
-    ///        object), then its properties. Values kept as raw bytes (no type information) are written in
+    ///        object), then its properties. A Model subobject (a brush) is written as UnrealEd does:
+    ///        `Begin Brush Name=<model>` / `Begin PolyList` / one `Begin Polygon` per polygon with `Item=`,
+    ///        `Texture=`, `Flags=`, `Link=`, `ShadowMapScale=`, `LightingChannels=` attributes (non-default ones) and
+    ///        `Origin`, `Normal`, `TextureU`, `TextureV`, `Vertex` lines (`%+013.6f` components); a Model that
+    ///        cannot be decoded falls back to a `Begin Object` block ("t3d.brush-not-decoded"). Values kept as raw bytes (no type information) are written in
     ///        format_property_value()'s raw notation and reported to @p diagnostics ("t3d.raw-value").
     [[nodiscard]] T3DBlock export_object(Linker& linker, ObjectRef object, std::string_view block_type,
                                          const ExportOptions& options = {}, Diagnostics* diagnostics = nullptr);

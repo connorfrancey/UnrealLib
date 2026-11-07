@@ -15,9 +15,11 @@ consumed **exactly**: a reader that stops early or runs past the export is an er
 | SkeletalMesh | `read_skeletal_mesh` | ActorX PSK | 742 parse; 19,540 bones, 1.8M vertices; every vertex's weights sum to 255; all bone/index references in range |
 | AnimSequence | `read_anim_sequence` | ActorX PSA (per AnimSet) | 6,938 decode; decoded tracks cover each compressed byte stream exactly; all rotations unit length |
 | AnimSet, TdAnimSet | `read_anim_set` | — | 679 parse; for all 560 populated sets each sequence has one track per bone |
+| Polys | `read_polys` | T3D `Begin PolyList` (via T3D export) | 9,392 parse exactly (65,005 polygons); every polygon has ≥ 3 vertices and a unit normal; ElementOwner is the Polys itself or its outer Model |
+| Model | `read_model` (up to the Polys reference) | — | 9,392 parse (41,850 BSP surfaces, zones included); every surface indexes the decoded points/vectors; the Polys reference is a Polys |
 | Material, MaterialInstanceConstant, MaterialInstanceTimeVarying | `read_material` | JSON metadata | 29,392 read with a ReflectionSchema; every parameter array decodes (21,821 parameters, 84,137 texture references, 391,680 expressions) |
 
-The checks run in `MirrorsEdgeAssetTests.FullCorpusAssets` and `.FullCorpusMaterials` (`UNREALLIB_FIXTURE_SWEEP=1`,
+The checks run in `MirrorsEdgeAssetTests.FullCorpusAssets`, `.FullCorpusMaterials` and `.FullCorpusBrushes` (`UNREALLIB_FIXTURE_SWEEP=1`,
 about two minutes in Release). `UNREALLIB_ASSET_DUMP=<dir>` writes a sample of decoded textures, meshes and skeletal
 meshes for manual review (game-derived output: never commit it).
 
@@ -65,6 +67,9 @@ BC5, G16, V8U8, A1 and the float formats. Unit tests check every BC block mode a
   Fixed32NoW, throw `UnsupportedError` (none occur in Mirror's Edge). Version-gated layouts beyond 536 are rejected
   where they were not implemented (e.g. static mesh color streams ≥ 615, skeletal index buffers ≥ 806).
 * Skeletal chunk CPU vertices (rigid/soft) are skipped; the GPU-skin vertex buffer is decoded.
-* Fonts, terrain, BSP models, physics assets, particle systems and level data are not deserialized beyond their
+* `read_model` stops after the Polys reference: BSP nodes and verts are skipped by size, and leaf hulls, leaves,
+  portal nodes, the vertex buffer and lighting data after Polys are not decoded. File versions other than 536 are
+  rejected for Model, and FPoly layouts < 78 or ≥ 600 for Polys.
+* Fonts, terrain, physics assets, particle systems and level data are not deserialized beyond their
   properties. Audio is extracted, not decoded (Ogg Vorbis is a standard format).
 * LZX-compressed bulk data (Xbox 360) is not supported.

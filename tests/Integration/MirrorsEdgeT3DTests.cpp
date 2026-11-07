@@ -4,7 +4,9 @@
 // For every package under Maps/ that has a Level export:
 //   * export_level() succeeds and exports one Actor block per Actor-derived export of the level;
 //   * the exported document survives serialize() -> parse() unchanged and re-serializes to the same text;
-//   * validate() reports no missing Class/Name, duplicate names or unresolved component references.
+//   * validate() reports no missing Class/Name, duplicate names, unresolved component references or degenerate
+//     polygons;
+//   * every brush (Model subobject) is exported as a Begin Brush / PolyList block.
 
 #include <gtest/gtest.h>
 
@@ -35,6 +37,9 @@ namespace
         std::size_t subobjects = 0;
         std::size_t properties = 0;
         std::size_t raw_values = 0;
+        std::size_t brushes = 0;
+        std::size_t polygons = 0;
+        std::size_t brushes_not_decoded = 0;
         std::size_t failures = 0;
         std::map<std::string, std::size_t> warnings;
     };
@@ -43,6 +48,8 @@ namespace
     {
         if (b.type == "Actor") ++tally.actors;
         if (b.type == "Object") ++tally.subobjects;
+        if (b.type == "Brush") ++tally.brushes;
+        if (b.type == "Polygon") ++tally.polygons;
         tally.properties += b.properties.size();
         for (const auto& c : b.children) count(c, tally);
     }
@@ -69,7 +76,17 @@ namespace
             T3D::ExportOptions options;
             options.schema = schema;
             const T3D::T3DDocument doc = T3D::export_level(linker, package, options, &diagnostics);
-            tally.raw_values += diagnostics.entries().size();
+            for (const Diagnostic& d : diagnostics.entries())
+            {
+                if (d.code == "t3d.brush-not-decoded")
+                {
+                    if (tally.brushes_not_decoded++ < 3) std::cout << "  " << d.message << '\n';
+                }
+                else
+                {
+                    ++tally.raw_values;
+                }
+            }
             ++tally.levels;
 
             ASSERT_EQ(doc.blocks.size(), 1u);
@@ -128,7 +145,9 @@ namespace
     {
         std::cout << "  levels: " << tally.levels << ", actors: " << tally.actors << ", subobjects: "
                   << tally.subobjects << ", properties: " << tally.properties
-                  << ", raw-valued properties: " << tally.raw_values << ", failures: " << tally.failures << '\n';
+                  << ", raw-valued properties: " << tally.raw_values << ", failures: " << tally.failures << '\n'
+                  << "  brushes: " << tally.brushes << ", polygons: " << tally.polygons
+                  << ", brushes not decoded: " << tally.brushes_not_decoded << '\n';
         for (const auto& [code, n] : tally.warnings) std::cout << "  " << n << "x " << code << '\n';
     }
 
@@ -156,6 +175,10 @@ namespace
         EXPECT_EQ(tally.warnings.count("t3d.actor-without-name"), 0u);
         EXPECT_EQ(tally.warnings.count("t3d.duplicate-name"), 0u);
         EXPECT_EQ(tally.warnings.count("t3d.unresolved-subobject"), 0u);
+        EXPECT_EQ(tally.warnings.count("t3d.degenerate-polygon"), 0u);
+        EXPECT_GT(tally.brushes, 0u);
+        EXPECT_GT(tally.polygons, 0u);
+        EXPECT_EQ(tally.brushes_not_decoded, 0u);
     }
 }
 

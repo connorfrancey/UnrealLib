@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <UnrealLib/Assets/Animation.hpp>
+#include <UnrealLib/Assets/Brush.hpp>
 #include <UnrealLib/Assets/Image.hpp>
 #include <UnrealLib/Assets/Material.hpp>
 #include <UnrealLib/Assets/SkeletalMesh.hpp>
@@ -65,6 +66,9 @@ namespace
         std::map<std::string, std::size_t> anim_formats;
         std::map<std::string, std::size_t> anim_set_bones;
         std::map<std::string, std::size_t> uv_sets;
+        std::size_t polygons = 0;
+        std::size_t model_surfaces = 0;
+        std::size_t models_with_polys = 0;
 
         void fail(const std::string& cls, const std::string& path, const std::string& message)
         {
@@ -82,7 +86,7 @@ namespace
         return b.describe_flags() + (b.element_count == 0 ? " (empty)" : "");
     }
 
-    void check_assets(Linker& linker, const Package& package, AssetTally& tally)
+    void check_assets(Linker& linker, const Package& package, AssetTally& tally, bool brushes_only = false)
     {
         const std::string dump = env("UNREALLIB_ASSET_DUMP");
         for (std::size_t i = 0; i < package.exports().size(); ++i)
@@ -94,6 +98,7 @@ namespace
                 continue;
             }
             const std::string cls = package.class_name(ref.index);
+            if (brushes_only && cls != "Polys" && cls != "Model") continue;
             try
             {
                 if (is_texture2d_class(cls))
@@ -236,6 +241,60 @@ namespace
                         }
                     }
                 }
+                else if (cls == "Polys")
+                {
+                    // read_polys() checks that the data is consumed exactly; every polygon is planar-ish data with
+                    // at least 3 vertices and a unit normal, and the owner is the Polys' outer Model when it has one.
+                    const Polys polys = read_polys(linker, ref);
+                    ++tally.read[cls];
+                    tally.polygons += polys.elements.size();
+                    const ObjectIndex outer = package.exports()[i].outer;
+                    // The owner is the Polys itself in ~86% of the game's Polys (e.g. i_Maintenance prefabs).
+                    if (!outer.is_null() && package.class_name(outer) == "Model" && polys.element_owner != outer &&
+                        polys.element_owner != ref.index)
+                    {
+                        tally.fail(cls, linker.qualified_path(ref), "ElementOwner is not the outer Model");
+                    }
+                    for (const Poly& p : polys.elements)
+                    {
+                        const float len = p.normal.x * p.normal.x + p.normal.y * p.normal.y + p.normal.z * p.normal.z;
+                        if (p.vertices.size() < 3 || std::abs(len - 1.0f) > 0.01f)
+                        {
+                            tally.fail(cls, linker.qualified_path(ref), "degenerate polygon");
+                            break;
+                        }
+                    }
+                }
+                else if (cls == "Model")
+                {
+                    // The decoded prefix must end in a Polys reference (or null), and surfaces must index the
+                    // decoded vectors and points.
+                    const Model model = read_model(linker, ref);
+                    ++tally.read[cls];
+                    tally.model_surfaces += model.surfaces.size();
+                    if (model.surface_owner != ref.index)
+                    {
+                        tally.fail(cls, linker.qualified_path(ref), "surface owner is not the model");
+                    }
+                    if (!model.polys.is_null())
+                    {
+                        ++tally.models_with_polys;
+                        if (!package.is_valid(model.polys) || package.class_name(model.polys) != "Polys")
+                        {
+                            tally.fail(cls, linker.qualified_path(ref), "Polys reference is not a Polys");
+                        }
+                    }
+                    for (const BspSurface& s : model.surfaces)
+                    {
+                        const auto in = [](std::int32_t i, std::size_t n) { return i >= 0 && static_cast<std::size_t>(i) < n; };
+                        if (!in(s.base, model.points.size()) || !in(s.normal, model.vectors.size()) ||
+                            !in(s.texture_u, model.vectors.size()) || !in(s.texture_v, model.vectors.size()))
+                        {
+                            tally.fail(cls, linker.qualified_path(ref), "surface index out of range");
+                            break;
+                        }
+                    }
+                }
                 else if (cls == "TextureCube")
                 {
                     (void)read_texture_cube(linker, ref);
@@ -290,6 +349,8 @@ namespace
         print_map("static mesh UV sets", tally.uv_sets);
         print_map("anim sets", tally.anim_set_bones);
         std::cout << "  static mesh vertices: " << tally.mesh_vertices << ", triangles: " << tally.mesh_triangles << '\n'
+                  << "  brush polygons: " << tally.polygons << ", BSP surfaces: " << tally.model_surfaces
+                  << ", models with Polys: " << tally.models_with_polys << '\n'
                   << "  skeletal mesh bones: " << tally.skeletal_bones << ", vertices: " << tally.skeletal_vertices
                   << '\n';
         std::cout << "  textures decoded: " << tally.textures_decoded
@@ -400,4 +461,28 @@ TEST(MirrorsEdgeAssetTests, FullCorpusMaterials)
     EXPECT_EQ(failures, 0u);
     EXPECT_EQ(undecoded, 0u);
     EXPECT_EQ(unnamed, 0u);
+}
+
+TEST(MirrorsEdgeAssetTests, FullCorpusBrushes)
+{
+    // Every Model and Polys export of the game (brush geometry). Loading every package takes minutes in Debug, so it
+    // runs with the fixture sweep.
+    if (!fixtures_available() || env("UNREALLIB_FIXTURE_SWEEP") != "1")
+    {
+        GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_FIXTURE_SWEEP=1";
+    }
+    AssetTally tally;
+    for (const auto& file : packages(true))
+    {
+        Linker linker;
+        linker.add_search_path(fixture_dir());
+        check_assets(linker, linker.load(file), tally, true);
+    }
+    print_map("read", tally.read);
+    print_map("failures", tally.failures);
+    std::cout << "  brush polygons: " << tally.polygons << ", BSP surfaces: " << tally.model_surfaces
+              << ", models with Polys: " << tally.models_with_polys << std::endl;
+    EXPECT_GT(tally.read["Model"], 0u);
+    EXPECT_GT(tally.read["Polys"], 0u);
+    EXPECT_EQ(tally.total_failures, 0u);
 }

@@ -32,7 +32,7 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
   Vorbis), static meshes (OBJ), skeletal meshes (PSK), animations (PSA), material metadata (JSON).
 * Package writer (`PackageModel`, `write_package`): edit names/imports/exports/properties and re-lay out the file,
   optionally zlib/LZO compressed.
-* T3D: parser, serializer, validation and level/object export ([docs/t3d.md](docs/t3d.md)).
+* T3D: parser, serializer, validation and level/object export, including brush geometry ([docs/t3d.md](docs/t3d.md)).
 * Tools: `UnrealPackageInspector` (text or normalized JSON), `UnrealPackageValidator`, `UnrealScriptDecompiler` and
   `UnrealPackageExtractor`.
 

@@ -33,6 +33,8 @@ namespace
                Begin Polygon Flags=3584
                   Origin   -00128.000000,-00128.000000,+00128.000000
                   Vertex   -00128.000000,-00128.000000,+00128.000000
+                  Vertex   +00128.000000,-00128.000000,+00128.000000
+                  Vertex   +00128.000000,+00128.000000,+00128.000000
                End Polygon
             End PolyList
          End Brush
@@ -74,7 +76,7 @@ TEST(T3DText, ParsesNestedBlocksAttributesAndProperties)
     const T3DBlock& polygon = level.children[1].children[0].children[0].children[0];
     EXPECT_EQ(polygon.type, "Polygon");
     EXPECT_EQ(polygon.attribute("Flags"), "3584");
-    ASSERT_EQ(polygon.lines.size(), 2u);
+    ASSERT_EQ(polygon.lines.size(), 4u);
     EXPECT_EQ(polygon.lines[1], "Vertex   -00128.000000,-00128.000000,+00128.000000");
 }
 
@@ -169,7 +171,22 @@ TEST(T3DText, ValidateFindsSemanticProblems)
     EXPECT_EQ(std::count_if(d.entries().begin(), d.entries().end(),
                             [](const Diagnostic& e) { return e.code == "t3d.unresolved-subobject"; }),
               1);
+    EXPECT_FALSE(has("t3d.degenerate-polygon"));
     EXPECT_TRUE(validate(parse(kMap)).entries().empty());
+}
+
+TEST(T3DText, ValidateFindsDegeneratePolygons)
+{
+    const Diagnostics d = validate(parse("Begin PolyList\n"
+                                         "   Begin Polygon\n"
+                                         "      Origin   +00000.000000,+00000.000000,+00000.000000\n"
+                                         "      Vertex   +00000.000000,+00000.000000,+00000.000000\n"
+                                         "      Vertex   +00001.000000,+00000.000000,+00000.000000\n"
+                                         "   End Polygon\n"
+                                         "End PolyList\n"));
+    ASSERT_EQ(d.entries().size(), 1u);
+    EXPECT_EQ(d.entries()[0].code, "t3d.degenerate-polygon");
+    EXPECT_NE(d.entries()[0].message.find("line 2"), std::string::npos);
 }
 
 namespace

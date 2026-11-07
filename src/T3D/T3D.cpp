@@ -8,6 +8,7 @@
 
 #include <fmt/format.h>
 
+#include <UnrealLib/Assets/Brush.hpp>
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Names/NameTable.hpp>
 #include <UnrealLib/Objects/ObjectFlags.hpp>
@@ -282,6 +283,17 @@ namespace UnrealLib::T3D
                 if (!b.attribute("Name")) d.warning("t3d.actor-without-name", where(b) + "Actor without Name=");
                 actor = &b;
             }
+            if (Text::iequals(b.type, "Polygon"))
+            {
+                const auto vertices = std::count_if(b.lines.begin(), b.lines.end(), [](const std::string& l) {
+                    return starts_with_word(trim(l), "Vertex");
+                });
+                if (vertices < 3)
+                {
+                    d.warning("t3d.degenerate-polygon",
+                              where(b) + fmt::format("Polygon with {} vertices (at least 3 expected)", vertices));
+                }
+            }
             if (Text::iequals(b.type, "Map") &&
                 std::none_of(b.children.begin(), b.children.end(),
                              [](const T3DBlock& c) { return Text::iequals(c.type, "Level"); }))
@@ -379,6 +391,65 @@ namespace UnrealLib::T3D
             return out;
         }
 
+        /// UnrealEd's FVector format in T3D polygons (`SetFVECTOR`: `%+013.6f` per component).
+        std::string t3d_vector(const Assets::Vec3& v)
+        {
+            return fmt::format("{:+013.6f},{:+013.6f},{:+013.6f}", v.x, v.y, v.z);
+        }
+
+        /// Path name of an object as UnrealEd writes it in `Texture=` (no class prefix).
+        std::string path_name(const Package& package, ObjectIndex index)
+        {
+            return index.is_export() ? package.name() + "." + package.object_path(index) : package.object_path(index);
+        }
+
+        /// `Begin Brush Name=<model>` with its `Begin PolyList` (UModelExporterT3D / UPolysExporterT3D).
+        T3DBlock brush_block(Linker& linker, ObjectRef model_ref, const PropertySchema* schema)
+        {
+            const Package& package = *model_ref.package;
+            const Assets::Model model = Assets::read_model(linker, model_ref, schema);
+            T3DBlock brush;
+            brush.type = "Brush";
+            brush.attributes.emplace_back("Name", model.name);
+            T3DBlock list;
+            list.type = "PolyList";
+            if (!model.polys.is_null() && model.polys.is_export() && package.is_valid(model.polys))
+            {
+                const Assets::Polys polys = Assets::read_polys(linker, ObjectRef{&package, model.polys}, schema);
+                for (const Assets::Poly& poly : polys.elements)
+                {
+                    T3DBlock polygon;
+                    polygon.type = "Polygon";
+                    if (!Text::iequals(poly.item_name, "None")) polygon.attributes.emplace_back("Item", poly.item_name);
+                    if (!poly.material.is_null() && package.is_valid(poly.material))
+                    {
+                        polygon.attributes.emplace_back("Texture", path_name(package, poly.material));
+                    }
+                    if (poly.poly_flags != 0) polygon.attributes.emplace_back("Flags", std::to_string(poly.poly_flags));
+                    if (poly.link != -1) polygon.attributes.emplace_back("Link", std::to_string(poly.link));
+                    if (poly.shadow_map_scale != 32.0f)
+                    {
+                        polygon.attributes.emplace_back("ShadowMapScale", fmt::format("{:.6f}", poly.shadow_map_scale));
+                    }
+                    if (poly.lighting_channels != 0)
+                    {
+                        polygon.attributes.emplace_back("LightingChannels", std::to_string(poly.lighting_channels));
+                    }
+                    polygon.lines.push_back("Origin   " + t3d_vector(poly.base));
+                    polygon.lines.push_back("Normal   " + t3d_vector(poly.normal));
+                    polygon.lines.push_back("TextureU " + t3d_vector(poly.texture_u));
+                    polygon.lines.push_back("TextureV " + t3d_vector(poly.texture_v));
+                    for (const Assets::Vec3& v : poly.vertices) polygon.lines.push_back("Vertex   " + t3d_vector(v));
+                    polygon.layout.assign(polygon.lines.size(), 'l');
+                    list.children.push_back(std::move(polygon));
+                    list.layout += 'c';
+                }
+            }
+            brush.children.push_back(std::move(list));
+            brush.layout = "c";
+            return brush;
+        }
+
         void export_into(Linker& linker, ObjectRef object, T3DBlock& block, const ExportOptions& options,
                          const std::vector<std::vector<ObjectIndex>>& children, Diagnostics* diagnostics, int depth)
         {
@@ -390,6 +461,25 @@ namespace UnrealLib::T3D
             {
                 for (const ObjectIndex sub : subobjects)
                 {
+                    if (package.class_name(sub) == "Model")
+                    {
+                        try
+                        {
+                            block.children.push_back(brush_block(linker, ObjectRef{&package, sub}, options.schema));
+                            block.layout += 'c';
+                            continue;
+                        }
+                        catch (const Error& e)
+                        {
+                            if (diagnostics != nullptr)
+                            {
+                                diagnostics->warning("t3d.brush-not-decoded",
+                                                     fmt::format("{}: brush exported as an Object block ({})",
+                                                                 linker.qualified_path(ObjectRef{&package, sub}),
+                                                                 e.what()));
+                            }
+                        }
+                    }
                     T3DBlock child;
                     child.type = "Object";
                     child.attributes.emplace_back("Class", package.class_name(sub));

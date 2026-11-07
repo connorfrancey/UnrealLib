@@ -53,6 +53,7 @@
 
 #include <UnrealLib/Assets/Animation.hpp>
 #include <UnrealLib/Assets/AssetObject.hpp>
+#include <UnrealLib/Assets/Brush.hpp>
 #include <UnrealLib/Assets/BulkData.hpp>
 #include <UnrealLib/Assets/Image.hpp>
 #include <UnrealLib/Assets/Material.hpp>
