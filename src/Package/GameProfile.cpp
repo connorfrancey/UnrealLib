@@ -49,6 +49,11 @@ namespace UnrealLib
         p.bytecode_overrides = {{std::uint8_t{0x4F}, "Unresolved"}};
         // Found by the asset corpus sweep: all 18,976 static meshes have 4 bytes after ThumbnailDistance.
         p.assets.static_mesh_trailing_float = true;
+        // UE Viewer (MIT), UnMesh3.cpp `#if MEDGE` branches (licensee >= 13 / >= 15); Mirror's Edge is licensee 43.
+        p.assets.skeletal_chunk_uv_sets = 3;
+        p.assets.skeletal_mesh_leading_int = true;
+        p.assets.skeletal_gpu_uv_count = true;
+        p.assets.skeletal_lod_ends_after_gpu_skin = true;
         p.verified = true;
         p.notes =
             "Upstream UELib: GameBuild [Build(536, 43)] MirrorsEdge. Verified against the Steam release: 2425/2426 "

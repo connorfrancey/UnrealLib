@@ -2,7 +2,7 @@
 //
 //   textures (Texture2D and subclasses): PNG (default), TGA, or DDS with every available mip (lossless)
 //   sounds (SoundNodeWave): the stored file as-is (Mirror's Edge PC: Ogg Vorbis)
-//   static meshes: Wavefront OBJ (LOD 0)
+//   static meshes: Wavefront OBJ (LOD 0); skeletal meshes: ActorX PSK (LOD 0, with skeleton and weights)
 //
 // Output: <output>/<Package>/<Outer path>/<Name>.<ext>. Mips streamed from other packages are found through the
 // search paths (default: the package's directory, recursively).
@@ -126,6 +126,19 @@ namespace
         ++totals.written;
     }
 
+    void extract_skeletal_mesh(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root,
+                               Totals& totals)
+    {
+        const SkeletalMesh mesh = read_skeletal_mesh(linker, ref);
+        if (mesh.lods.empty())
+        {
+            ++totals.skipped;
+            return;
+        }
+        write_file(output_path(root, package, ref.index, "psk"), to_psk(package, mesh));
+        ++totals.written;
+    }
+
     void extract_sound(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root, Totals& totals)
     {
         const SoundWave sound = read_sound_wave(linker, ref);
@@ -142,7 +155,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    CLI::App app{"Extract assets (textures, sounds, static meshes) from an Unreal Engine 3 package (UnrealLib)",
+    CLI::App app{"Extract assets (textures, sounds, meshes) from an Unreal Engine 3 package (UnrealLib)",
                  "UnrealPackageExtractor"};
     argv = app.ensure_utf8(argv);
 
@@ -200,7 +213,8 @@ int main(int argc, char** argv)
             const bool texture = settings.textures && is_texture2d_class(cls);
             const bool sound = settings.sounds && cls == "SoundNodeWave";
             const bool mesh = settings.meshes && cls == "StaticMesh";
-            if (!texture && !sound && !mesh)
+            const bool skeletal = settings.meshes && cls == "SkeletalMesh";
+            if (!texture && !sound && !mesh && !skeletal)
             {
                 continue;
             }
@@ -214,6 +228,7 @@ int main(int argc, char** argv)
                 const std::size_t before = totals.written;
                 if (texture) extract_texture(linker, package, ref, root, settings, totals);
                 else if (mesh) extract_static_mesh(linker, package, ref, root, totals);
+                else if (skeletal) extract_skeletal_mesh(linker, package, ref, root, totals);
                 else extract_sound(linker, package, ref, root, totals);
                 if (!settings.quiet && totals.written != before)
                 {

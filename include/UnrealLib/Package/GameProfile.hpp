@@ -43,9 +43,14 @@ namespace UnrealLib
     {
         /// StaticMesh ends with one extra float after ThumbnailDistance (Mirror's Edge; meaning unknown).
         bool static_mesh_trailing_float = false;
-        /// Number of UV sets in skeletal mesh GPU vertices when the version would imply 1 (Mirror's Edge: 3,
-        /// licensee >= 13; UE Viewer). 0 = engine default.
-        std::uint8_t skeletal_uv_sets = 0;
+        /// UV sets of skeletal mesh rigid/soft (chunk) vertices when the version would imply 1. 0 = engine default.
+        std::uint8_t skeletal_chunk_uv_sets = 0;
+        /// SkeletalMesh native data starts with an extra int32.
+        bool skeletal_mesh_leading_int = false;
+        /// The skeletal GPU vertex buffer stores its UV set count (engine: from version 709).
+        bool skeletal_gpu_uv_count = false;
+        /// Skeletal LOD models end after the GPU vertex buffer (no ExtraVertexInfluences although version >= 534).
+        bool skeletal_lod_ends_after_gpu_skin = false;
     };
 
     /// @brief Describes one game build and the facts used to recognise its packages.

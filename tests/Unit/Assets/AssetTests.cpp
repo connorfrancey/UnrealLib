@@ -9,7 +9,9 @@
 #include <UnrealLib/Assets/BulkData.hpp>
 #include <UnrealLib/Assets/Image.hpp>
 #include <UnrealLib/Assets/MeshTypes.hpp>
+#include <UnrealLib/Assets/SkeletalMesh.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
+#include <UnrealLib/Package/Package.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
@@ -243,4 +245,62 @@ TEST(MeshTypesTests, UnpacksPackedNormals)
     const Vec3 down = unpack_normal(0x00000000u);
     EXPECT_FLOAT_EQ(down.x, -1.0f);
     EXPECT_FLOAT_EQ(down.z, -1.0f);
+}
+
+TEST(SkeletalMeshTests, PskHasChunksInOrderAndMirrorsGeometry)
+{
+    SkeletalMesh mesh;
+    mesh.name = "Tri";
+    MeshBone root;
+    root.name = "Root";
+    root.orientation = {0.1f, 0.2f, 0.3f, 0.9f};
+    root.position = {1.0f, 2.0f, 3.0f};
+    mesh.skeleton.push_back(root);
+    SkeletalLod lod;
+    for (int i = 0; i < 3; ++i)
+    {
+        SkinnedVertex v;
+        v.position = {static_cast<float>(i), 5.0f, 0.0f};
+        v.weights = {255, 0, 0, 0};
+        lod.vertices.push_back(v);
+    }
+    lod.indices = {0, 1, 2};
+    lod.sections.push_back(SkeletalSection{0, 0, 0, 1});
+    mesh.lods.push_back(lod);
+
+    const Package package; // no materials referenced
+    const auto psk = to_psk(package, mesh);
+    BinaryReader r(psk);
+    const auto chunk = [&](const char* id, std::int32_t size, std::int32_t count) {
+        const auto name = r.read_view(20);
+        EXPECT_EQ(std::string(reinterpret_cast<const char*>(name.data())), id);
+        EXPECT_EQ(r.read_u32(), 20100422u);
+        EXPECT_EQ(r.read_i32(), size) << id;
+        EXPECT_EQ(r.read_i32(), count) << id;
+    };
+    chunk("ACTRHEAD", 0, 0);
+    chunk("PNTS0000", 12, 3);
+    EXPECT_FLOAT_EQ(r.read_f32(), 0.0f);
+    EXPECT_FLOAT_EQ(r.read_f32(), -5.0f); // Y mirrored
+    (void)r.read_view(12 * 2 + 4);
+    chunk("VTXW0000", 16, 3);
+    (void)r.read_view(48);
+    chunk("FACE0000", 12, 1);
+    EXPECT_EQ(r.read_u16(), 1); // first two corners swapped
+    EXPECT_EQ(r.read_u16(), 0);
+    EXPECT_EQ(r.read_u16(), 2);
+    (void)r.read_view(6);
+    chunk("MATT0000", 88, 1);
+    (void)r.read_view(88);
+    chunk("REFSKELT", 120, 1);
+    (void)r.read_view(64 + 12);
+    EXPECT_FLOAT_EQ(r.read_f32(), 0.1f);
+    EXPECT_FLOAT_EQ(r.read_f32(), -0.2f);
+    EXPECT_FLOAT_EQ(r.read_f32(), 0.3f);
+    EXPECT_FLOAT_EQ(r.read_f32(), -0.9f); // root: only the mirror negates W (non-root bones are negated twice)
+    (void)r.read_view(12 + 16);
+    chunk("RAWWEIGHTS", 12, 3);
+    EXPECT_FLOAT_EQ(r.read_f32(), 1.0f);
+    (void)r.read_view(8 + 24);
+    EXPECT_TRUE(r.at_end());
 }

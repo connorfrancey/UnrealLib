@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <UnrealLib/Assets/Image.hpp>
+#include <UnrealLib/Assets/SkeletalMesh.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
 #include <UnrealLib/Assets/StaticMesh.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
@@ -54,6 +55,9 @@ namespace
         std::size_t mesh_vertices = 0;
         std::size_t mesh_triangles = 0;
         std::size_t meshes_dumped = 0;
+        std::size_t skeletal_bones = 0;
+        std::size_t skeletal_vertices = 0;
+        std::size_t skeletal_dumped = 0;
         std::map<std::string, std::size_t> uv_sets;
 
         void fail(const std::string& cls, const std::string& path, const std::string& message)
@@ -156,6 +160,33 @@ namespace
                                    std::as_bytes(std::span(obj)));
                     }
                 }
+                else if (cls == "SkeletalMesh")
+                {
+                    const SkeletalMesh mesh = read_skeletal_mesh(linker, ref);
+                    ++tally.read[cls];
+                    tally.skeletal_bones += mesh.skeleton.size();
+                    for (const auto& lod : mesh.lods)
+                    {
+                        tally.skeletal_vertices += lod.vertices.size();
+                        ++tally.uv_sets["skeletal " + std::to_string(lod.num_uv_sets) +
+                                        (lod.full_precision_uvs ? " float" : " half")];
+                        // Every vertex's weights sum to 255.
+                        for (const auto& v : lod.vertices)
+                        {
+                            if (v.weights[0] + v.weights[1] + v.weights[2] + v.weights[3] != 255)
+                            {
+                                tally.fail(cls, linker.qualified_path(ref), "weights do not sum to 255");
+                                break;
+                            }
+                        }
+                    }
+                    if (!dump.empty() && tally.skeletal_dumped < 10 && !mesh.lods.empty() && tally.read[cls] % 50 == 1)
+                    {
+                        ++tally.skeletal_dumped;
+                        write_file(fs::path(dump) / "skeletal" / (package.name() + "." + mesh.name + ".psk"),
+                                   to_psk(package, mesh));
+                    }
+                }
                 else if (cls == "TextureCube")
                 {
                     (void)read_texture_cube(linker, ref);
@@ -208,7 +239,9 @@ namespace
         print_map("sound bulk flags", tally.sound_flags);
         print_map("audio containers", tally.containers);
         print_map("static mesh UV sets", tally.uv_sets);
-        std::cout << "  static mesh vertices: " << tally.mesh_vertices << ", triangles: " << tally.mesh_triangles << '\n';
+        std::cout << "  static mesh vertices: " << tally.mesh_vertices << ", triangles: " << tally.mesh_triangles << '\n'
+                  << "  skeletal mesh bones: " << tally.skeletal_bones << ", vertices: " << tally.skeletal_vertices
+                  << '\n';
         std::cout << "  textures decoded: " << tally.textures_decoded
                   << ", without stored mips: " << tally.textures_without_payload
                   << ", decode failures: " << tally.texture_decode_failures
