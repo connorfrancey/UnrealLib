@@ -66,6 +66,19 @@ function(unreallib_set_compiler_options target)
         endif ()
     endif ()
 
+    if (UNREALLIB_BUILD_FUZZERS)
+        # libFuzzer coverage instrumentation for every UnrealLib target (the fuzzer executables link libFuzzer).
+        # This is -fsanitize=fuzzer-no-link without `indirect-calls`: with clang-cl 22 that instrumentation breaks C++
+        # exception unwinding on Windows (a caught UnrealLib::Error ends the process with STATUS_BREAKPOINT).
+        target_compile_options(${target} PRIVATE -fsanitize-coverage=inline-8bit-counters,pc-table,trace-cmp)
+        if (MSVC)
+            unreallib_clang_runtime_dir(_runtime_dir)
+            if (_runtime_dir)
+                target_link_options(${target} PRIVATE "/LIBPATH:${_runtime_dir}")
+            endif ()
+        endif ()
+    endif ()
+
     if (UNREALLIB_ENABLE_ASAN)
         if (MSVC)
             # MSVC needs the optional "C++ AddressSanitizer" Visual Studio component.
@@ -77,10 +90,14 @@ function(unreallib_set_compiler_options target)
                 target_link_options(${target} PRIVATE "/LIBPATH:${_runtime_dir}")
                 get_target_property(_type ${target} TYPE)
                 if (_type STREQUAL "EXECUTABLE")
-                    # What clang's driver would add when linking with -fsanitize=address and the dynamic CRT.
-                    target_link_options(${target} PRIVATE
-                            "clang_rt.asan_dynamic-x86_64.lib"
-                            "/WHOLEARCHIVE:clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
+                    # What clang's driver would add when linking with -fsanitize=address: the ASan DLL's import library
+                    # and the thunk matching the CRT (static CRT: e.g. the libFuzzer preset, whose runtime is /MT).
+                    if (CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL$" OR NOT CMAKE_MSVC_RUNTIME_LIBRARY)
+                        set(_thunk "clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
+                    else ()
+                        set(_thunk "clang_rt.asan_static_runtime_thunk-x86_64.lib")
+                    endif ()
+                    target_link_options(${target} PRIVATE "clang_rt.asan_dynamic-x86_64.lib" "/WHOLEARCHIVE:${_thunk}")
                     file(GLOB _asan_dll "${_runtime_dir}/clang_rt.asan_dynamic-*.dll")
                     if (_asan_dll)
                         add_custom_command(TARGET ${target} POST_BUILD

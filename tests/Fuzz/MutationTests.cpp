@@ -2,8 +2,8 @@
 //
 // Every mutated input must either load or fail with an UnrealLib::Error — never crash, hang, trip a sanitizer, or
 // throw anything else (std::bad_alloc in particular would indicate an uncontrolled allocation). Run under the
-// msvc-x64-asan preset for memory-safety coverage. A libFuzzer harness for clang builds is planned (see
-// docs/development.md).
+// msvc-x64-asan preset for memory-safety coverage. Broader coverage: FuzzReplayTests.cpp (all fuzz targets) and the
+// libFuzzer executables (tests/Fuzz/CMakeLists.txt).
 
 #include <gtest/gtest.h>
 

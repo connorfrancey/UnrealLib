@@ -12,6 +12,7 @@ option(UNREALLIB_BUILD_TOOLS "Build the command-line tools" ${PROJECT_IS_TOP_LEV
 option(UNREALLIB_BUILD_EXAMPLES "Build the examples" ${PROJECT_IS_TOP_LEVEL})
 option(UNREALLIB_BUILD_BENCHMARKS "Build the benchmarks (Google Benchmark)" OFF)
 option(UNREALLIB_BUILD_DOCS "Add a 'unreallib_docs' target that runs Doxygen" OFF)
+option(UNREALLIB_BUILD_FUZZERS "Build the libFuzzer executables (clang/clang-cl; instruments every UnrealLib target)" OFF)
 option(UNREALLIB_ENABLE_ASAN "Build with AddressSanitizer where supported" OFF)
 option(UNREALLIB_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(UNREALLIB_BUILD_DIFFERENTIAL "Build differential tests against upstream C# UELib (requires the .NET SDK)" OFF)

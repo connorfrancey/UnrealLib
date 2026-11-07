@@ -37,6 +37,10 @@ if (UNREALLIB_BUILD_TESTS)
     add_subdirectory(tests)
 endif ()
 
+if (UNREALLIB_BUILD_FUZZERS)
+    add_subdirectory(tests/Fuzz)
+endif ()
+
 if (UNREALLIB_BUILD_TOOLS)
     add_subdirectory(tools)
 endif ()

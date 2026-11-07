@@ -65,6 +65,7 @@ Presets: `msvc-x64-debug`, `msvc-x64-release`, `msvc-x86-debug`, `msvc-x86-relea
 | `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator`, `UnrealScriptDecompiler`, `UnrealPackageExtractor`, `UnrealT3DImporter` |
 | `UNREALLIB_BUILD_EXAMPLES` | top-level | examples |
 | `UNREALLIB_BUILD_BENCHMARKS` | OFF | (no benchmarks yet) |
+| `UNREALLIB_BUILD_FUZZERS` | OFF | libFuzzer executables (clang/clang-cl; use preset `clang-cl-x64-fuzz`) |
 | `UNREALLIB_BUILD_DOCS` | OFF | `unreallib_docs` Doxygen target |
 | `UNREALLIB_USE_CCACHE` | top-level | compile through ccache if found |
 | `UNREALLIB_ENABLE_ASAN` | OFF | AddressSanitizer |
@@ -145,7 +146,7 @@ GoogleTest is the test framework (with GoogleMock available); tests are discover
 | `tests/Support` | `SyntheticPackage`: builds valid UE3 packages in memory (optionally zlib-compressed, any block size) |
 | `tests/Unit/Serialization/PropertyBasedTests.cpp` | RapidCheck properties: round trips (integers, float bit patterns, both byte orders, CompactIndex, FString, bit streams, property tags) and totality on arbitrary bytes |
 | `tests/Regression` | approval tests: token maps, synthetic package bytes and listing, property formatting (`approved/`) |
-| `tests/Fuzz` | deterministic mutation testing of the loader (must only ever throw `UnrealLib::Error`) |
+| `tests/Fuzz` | fuzz targets, seeds and regression inputs; `FuzzReplayTests` (every run) and libFuzzer executables (see *Fuzzing* below); `MutationTests` for the loader |
 | `tests/Integration` | real Mirror's Edge fixtures (skipped unless `UNREALLIB_MIRRORSEDGE_DIR` is set) |
 | `tests/Differential` | UnrealLib vs. upstream C# UELib (opt-in, needs the .NET SDK) |
 | `tests/Install` | `Install.Consumer`: install + `find_package(UnrealLib)` from a separate project |
@@ -208,6 +209,44 @@ ctest --preset clang-cl-x64-asan
 
 Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests and real-fixture tests.
 
+### Fuzzing
+
+Seven fuzz targets (`tests/Fuzz/Targets`) cover the inputs the library parses: `package` (summary, compressed
+chunks, name/import/export/depends tables, validation, object headers and properties of every export),
+`serialization` (CompactIndex, FString, FName, … in every version/byte-order context, with round trips),
+`properties` (tags and values; `write(read(x))` must be a fixed point and every value must survive
+`format_property_value` → `parse_property_value`), `bytecode`, `compression` (zlib/LZO decoding and
+compress → decompress round trips), `assets` (every asset reader on a fuzzed package) and `text` (T3D parser with its
+serialize/parse invariant, property text parser). Contract: any input is accepted or rejected with
+`UnrealLib::Error`; any other exception, crash, hang, sanitizer report or violated invariant is a bug.
+
+* **Every test run** (`FuzzReplayTests`, any compiler): each target runs its seeds, the inputs in
+  `tests/Fuzz/Regressions/<target>/` (crash/hang files from libFuzzer, kept forever) and 2,000 deterministic mutations
+  (`UNREALLIB_FUZZ_ITERATIONS` to change). `UNREALLIB_FUZZ_TRACE=<file>` writes each input to `<file>` before running
+  it, which identifies hangs.
+* **libFuzzer** (preset `clang-cl-x64-fuzz`: ASan + coverage, tests/tools off):
+
+  ```powershell
+  uv run uelib.py build clang-cl-x64-fuzz
+  build/clang-cl-x64-fuzz/tests/Fuzz/UnrealLibFuzzSeeds.exe corpus
+  build/clang-cl-x64-fuzz/tests/Fuzz/UnrealLibFuzz_package.exe corpus/package -max_total_time=600 -timeout=10
+  ```
+
+  Copy any `crash-*`/`timeout-*` file into `tests/Fuzz/Regressions/<target>/` with a descriptive name.
+
+Toolchain notes (clang-cl 22 / LLVM libFuzzer on Windows): libFuzzer's runtime is built for the static CRT, so the
+preset uses `MultiThreaded`. Two instrumentation problems break C++ exception unwinding (a caught `UnrealLib::Error`
+ends the process with `STATUS_BREAKPOINT` or an access violation inside the throw), so the preset avoids both:
+`-fsanitize-coverage=indirect-calls` (part of `-fsanitize=fuzzer-no-link`; the modules are instrumented with
+`inline-8bit-counters,pc-table,trace-cmp` instead) and optimization under ASan + libFuzzer (the preset builds
+unoptimized). Each was confirmed by bisection; the affected inputs are in `Regressions/` and pass in MSVC Debug/Release,
+clang-cl ASan and optimized clang-cl builds.
+
+Results: a 60-second libFuzzer run per target (about 5.5 million inputs) and 50,000 replay mutations per target find
+nothing further. Bug found and fixed: a package whose export outers form a cycle (A → B → A) made
+`Linker::header_input()` loop forever (it only guarded against an object being its own outer); every outer/super chain
+walk in the library is now bounded or cycle-checked (`Regressions/package/cyclic-outer-hang.bin`).
+
 ## Coding rules (summary)
 
 * C++20, no compiler extensions, `/W4 /permissive-` clean.
@@ -231,13 +270,13 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 | M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
 | M7 | Assets (textures, sound, meshes, materials, animation) + PackageExtractor | **done** (every texture, sound, static/skeletal mesh, animation and material of the game; see [assets.md](assets.md)) |
 | M8 | T3D, package writer, LZO compression | **done** — writer: all 873 uncompressed packages rewritten byte-identically, all 1,553 compressed ones reload with identical tables and export bytes, LZO encoder; T3D: parser/serializer/validation, level export verified on all 680 levels (152,965 actors, 7,958 brushes / 48,103 polygons, 2,880,354 properties, 0 raw values, text round trip exact; see [t3d.md](t3d.md)); T3D import (`import_document`, `parse_property_value`, `UnrealT3DImporter`): every level's unmodified export imports back with 0 changes (338,507 objects), edits round-trip through write → reload → export; brush geometry: `read_polys`/`write_polys` (byte-exact) and `read_model` on all 9,392 Polys/Model exports |
-| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **in progress** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release) |
+| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **in progress** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release); fuzzing: 7 targets replayed on every test run + libFuzzer preset (one cyclic-outer hang found and fixed) |
 
 ### Next concrete tasks
 
 1. Differential tests for M4/M5: compare property values and bytecode tokens with upstream UELib, not only the tables.
 2. Decode `MapProperty` values (kept raw today) once a fixture shows their layout.
-3. libFuzzer harness (clang-cl) and benchmarks for LZO decode, table parsing, import resolution and property parsing.
+3. Benchmarks for LZO decode, table parsing, import resolution and property parsing.
 
 ## Known limitations
 

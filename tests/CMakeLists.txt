@@ -12,6 +12,18 @@ target_include_directories(unreallib_test_support PUBLIC "${CMAKE_CURRENT_SOURCE
 target_link_libraries(unreallib_test_support PUBLIC UnrealLib::UnrealLib)
 unreallib_set_compiler_options(unreallib_test_support)
 
+# Fuzz targets: shared by the replay test below and the libFuzzer executables (tests/Fuzz/CMakeLists.txt).
+set(UNREALLIB_FUZZ_TARGET_SOURCES
+        Fuzz/FuzzTargets.hpp
+        Fuzz/Seeds.cpp
+        Fuzz/Targets/AssetsTarget.cpp
+        Fuzz/Targets/BytecodeTarget.cpp
+        Fuzz/Targets/CompressionTarget.cpp
+        Fuzz/Targets/PackageTarget.cpp
+        Fuzz/Targets/PropertiesTarget.cpp
+        Fuzz/Targets/SerializationTarget.cpp
+        Fuzz/Targets/TextTarget.cpp)
+
 add_executable(UnrealLibTests
         Support/TestMain.cpp
         Unit/Core/CoreTests.cpp
@@ -37,6 +49,8 @@ add_executable(UnrealLibTests
         Unit/Writer/WriterTests.cpp
         Unit/T3D/T3DTests.cpp
         Fuzz/MutationTests.cpp
+        Fuzz/FuzzReplayTests.cpp
+        ${UNREALLIB_FUZZ_TARGET_SOURCES}
         Integration/MirrorsEdgeFixtureTests.cpp
         Integration/MirrorsEdgeLinkerTests.cpp
         Integration/MirrorsEdgePropertyTests.cpp
@@ -47,6 +61,8 @@ add_executable(UnrealLibTests
         Integration/MirrorsEdgeT3DTests.cpp
         Regression/ApprovalRegressionTests.cpp)
 
+target_compile_definitions(UnrealLibTests PRIVATE
+        UNREALLIB_FUZZ_REGRESSION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Fuzz/Regressions")
 target_link_libraries(UnrealLibTests PRIVATE
         unreallib_test_support
         UnrealLib::UnrealLib

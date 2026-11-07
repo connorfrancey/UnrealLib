@@ -446,18 +446,17 @@ namespace UnrealLib
         input.object_flags = entry.object_flags;
         input.is_class = entry.class_index.is_null();
 
-        // ClassDefaultObject on the object or any of its (export) outers.
-        for (ObjectIndex current = object.index; current.is_export() && object.package->is_valid(current);
-             current = object.package->exports()[current.export_index()].outer)
+        // ClassDefaultObject on the object or any of its (export) outers. A malformed package can make the outer
+        // chain cyclic (A -> B -> A); a chain can visit each export at most once, so stop after that many steps.
+        std::size_t steps = 0;
+        for (ObjectIndex current = object.index;
+             current.is_export() && object.package->is_valid(current) && steps <= object.package->exports().size();
+             current = object.package->exports()[current.export_index()].outer, ++steps)
         {
             if ((object.package->exports()[current.export_index()].object_flags & ObjectFlag::ClassDefaultObject) != 0)
             {
                 input.is_class_default_template = true;
                 break;
-            }
-            if (current == object.package->exports()[current.export_index()].outer)
-            {
-                break; // self-outer guard
             }
         }
 
