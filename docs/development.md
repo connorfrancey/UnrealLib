@@ -187,6 +187,24 @@ How it works:
 Upstream does not decompress fully compressed packages, so for those only the summary is compared. The compressed
 chunk record is compared against upstream's *known* field-order bug, so the test fails if upstream ever changes it.
 
+For uncompressed script packages (`.u`) the dump also deserializes every object with upstream and records, per
+export, its property tags (name, stored type, size, array index, struct name, bool value) and, for structs with
+bytecode, the script's storage size and every token as (memory position, opcode — or `0x10000 +` native index for
+native calls). `ObjectsMatch` compares them with `Linker::read_properties` / `read_field` + `decode_script`:
+
+* upstream's `UScriptStruct` replaces its (empty) object property list with the struct defaults, so for a
+  ScriptStruct the struct defaults are compared;
+* known upstream deviation: its `PropertyType` enum aliases `DelegateProperty` to `StringProperty`, so delegate tags
+  are reported as `StringProperty`;
+* memory positions are compared rather than storage positions, because upstream's `StoragePosition` is one byte late
+  for two-byte (extended native) opcodes.
+
+Result on Mirror's Edge (the 12 uncompressed script packages: Engine.u, TdGame.u, MirrorsEdgeTweaksScripts.u,
+MirrorsEdgeConsole.u, Td*Content.u, Fp.u): property tags of all 58,845 objects upstream loads agree, and so do all
+439,779 tokens of 12,097 scripts and every script storage size. Upstream fails to deserialize 381 further objects
+(e.g. an enum-parsing exception in `UDefaultProperty.DeserializeTagUE3` for Engine UI components); UnrealLib reads the
+properties of all of them.
+
 ### AddressSanitizer
 
 ```powershell
@@ -300,13 +318,12 @@ Reference numbers (MSVC 19.51 x64 Release, 24-thread 4.4 GHz desktop):
 | M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
 | M7 | Assets (textures, sound, meshes, materials, animation) + PackageExtractor | **done** (every texture, sound, static/skeletal mesh, animation and material of the game; see [assets.md](assets.md)) |
 | M8 | T3D, package writer, LZO compression | **done** — writer: all 873 uncompressed packages rewritten byte-identically, all 1,553 compressed ones reload with identical tables and export bytes, LZO encoder; T3D: parser/serializer/validation, level export verified on all 680 levels (152,965 actors, 7,958 brushes / 48,103 polygons, 2,880,354 properties, 0 raw values, text round trip exact; see [t3d.md](t3d.md)); T3D import (`import_document`, `parse_property_value`, `UnrealT3DImporter`): every level's unmodified export imports back with 0 changes (338,507 objects), edits round-trip through write → reload → export; brush geometry: `read_polys`/`write_polys` (byte-exact) and `read_model` on all 9,392 Polys/Model exports |
-| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **in progress** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release); fuzzing: 7 targets replayed on every test run + libFuzzer preset (one cyclic-outer hang found and fixed); benchmarks (synthetic + Mirror's Edge fixture) |
+| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **in progress** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release); fuzzing: 7 targets replayed on every test run + libFuzzer preset (one cyclic-outer hang found and fixed); benchmarks (synthetic + Mirror's Edge fixture); differential tests extended to property tags and bytecode (58,845 objects, 439,779 tokens agree with upstream) |
 
 ### Next concrete tasks
 
-1. Differential tests for M4/M5: compare property values and bytecode tokens with upstream UELib, not only the tables.
-2. Decode `MapProperty` values (kept raw today) once a fixture shows their layout.
-3. API review and compatibility report (M9).
+1. Decode `MapProperty` values (kept raw today) once a fixture shows their layout.
+2. API review and compatibility report (M9).
 
 ## Known limitations
 
