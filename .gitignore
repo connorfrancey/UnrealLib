@@ -1,0 +1,34 @@
+# Build trees (CMake presets write to build/<preset>)
+build/
+out/
+cmake-build-*/
+
+# IDE / tooling caches
+.cache/
+.vs/
+.vscode/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/shelf/
+*.user
+
+# Never commit game packages
+*.u
+*.upk
+*.umap
+*.me1
+*.ut3
+*.udk
+*.xxx
+tests/Fixtures/**/*
+!tests/Fixtures/README.md
+
+# Misc
+CMakeUserPresets.json
+compile_commands.json
+*.log
+
+# Local settings of scripts/manage.py
+.manage.json
+__pycache__/
+.idea/discord.xml
