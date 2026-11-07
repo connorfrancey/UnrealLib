@@ -82,6 +82,8 @@ namespace UnrealLib::Assets
 
     /// @brief Reads and decodes an AnimSequence export. The native data must be consumed exactly and every track must
     ///        decode inside the byte stream.
+    /// @param linker Resolves the class hierarchy.
+    /// @param object The AnimSequence export.
     /// @param schema Needed for CompressedTrackOffsets only if its array is not decodable without one; the reader
     ///        also accepts the raw int32 elements.
     [[nodiscard]] AnimSequence read_anim_sequence(Linker& linker, ObjectRef object,

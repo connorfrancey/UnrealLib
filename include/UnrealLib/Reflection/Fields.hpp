@@ -287,7 +287,11 @@ namespace UnrealLib
     /// `UTextBuffer` `Deserialize`, default UE3 branch). Classes have no tagged properties before the UField data;
     /// every other kind does. Bytecode is skipped using ScriptSize (in-memory size); for versions where memory and
     /// storage sizes differ (>= 587, or < 343) the bytecode is decoded to find its end.
+    /// @param reader        Reader over the export data, positioned at its start.
+    /// @param kind          Kind of reflection object.
     /// @param property_type For FieldKind::Property, the concrete property class.
+    /// @param input         What the UObject header depends on (object flags, component, class default template).
+    /// @param options       Name table, cooking state, schema and diagnostics.
     [[nodiscard]] FieldObject read_field(BinaryReader& reader, FieldKind kind, PropertyType property_type,
                                          const ObjectHeaderInput& input, const FieldReadOptions& options);
 }

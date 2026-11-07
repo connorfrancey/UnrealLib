@@ -74,6 +74,8 @@ namespace UnrealLib::Assets
 
     /// @brief Reads the properties of @p object and locates its native data.
     /// @throws Error (InvalidArgument) for imports and class default objects (`Default__X`, which have no native data).
+    /// @param linker Resolves the class hierarchy.
+    /// @param object The export to open.
     /// @param schema Type information (nullptr: BuiltinPropertySchema; arrays of script structs stay raw).
     [[nodiscard]] AssetSource open_asset(Linker& linker, ObjectRef object, const PropertySchema* schema = nullptr);
 

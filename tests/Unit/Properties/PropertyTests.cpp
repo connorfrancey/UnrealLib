@@ -11,6 +11,13 @@ using namespace UnrealLib;
 
 namespace
 {
+    TypeDesc type_of(PropertyType type)
+    {
+        TypeDesc desc;
+        desc.type = type;
+        return desc;
+    }
+
     SerializationContext ctx(std::uint16_t version = 536)
     {
         SerializationContext c;
@@ -75,12 +82,12 @@ namespace
             {
                 TypeDesc array;
                 array.type = PropertyType::Array;
-                array.inner = std::make_shared<TypeDesc>(TypeDesc{PropertyType::Int});
+                array.inner = std::make_shared<TypeDesc>(type_of(PropertyType::Int));
                 return array;
             }
             return std::nullopt;
         }
-        StructLayout pair{"Pair", true, {{"A", TypeDesc{PropertyType::Int}, 1}, {"B", TypeDesc{PropertyType::Byte}, 2}}};
+        StructLayout pair{"Pair", true, {{"A", type_of(PropertyType::Int), 1}, {"B", type_of(PropertyType::Byte), 2}}};
     };
 }
 

@@ -211,7 +211,9 @@ namespace UnrealLib
     /// @brief Writes a property list read by read_properties() (tags, values, then "None").
     ///
     /// Tag sizes are recomputed from the encoded values, so unmodified lists are written byte-identically.
-    /// @param none FName of "None" in the package's name table.
+    /// @param writer     Destination.
+    /// @param properties The list to write.
+    /// @param none       FName of "None" in the package's name table.
     void write_properties(BinaryWriter& writer, const std::vector<Property>& properties, const FName& none);
 
     /// @brief Writes a single value as it is serialized after a tag or as an array element / binary struct field.

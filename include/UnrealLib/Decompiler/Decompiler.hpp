@@ -58,6 +58,7 @@ namespace UnrealLib::Decompiler
     public:
         /// @param linker  Resolves references across packages (callees, property types, supers).
         /// @param natives Native function table (NativeTable::from_packages()).
+        /// @param options Output options.
         ScriptDecompiler(Linker& linker, NativeTable natives, DecompileOptions options = {});
 
         /// @brief Decompiles a Function or State export: declaration, locals and body.

@@ -3,11 +3,11 @@
 A native C++20 library for reading Unreal Engine 3 packages, ported from the behaviour of
 [UELib](https://github.com/EliotVU/Unreal-Library) (C#). The first target is **Mirror's Edge (2008), PC**.
 
-> **Status: early (milestones M0–M5).** Package summaries, compression, name/import/export/depends tables, game
-> profiles, structural validation, cross-package import resolution, UObject headers, tagged script properties (typed
-> values, structs, arrays, byte-exact rewriting), reflection objects, UnrealScript bytecode decoding and decompilation of functions and states are implemented
-> and verified against all 2,426 packages of the Mirror's Edge PC release; the tables also against upstream UELib
-> (differential tests). Class-level decompilation, asset extraction, T3D and package writing are **not implemented yet** — see
+> **Status: milestones M0�M7 done, M8 (package writer, T3D) in progress.** Package summaries, compression,
+> name/import/export/depends tables, game profiles, structural validation, cross-package import resolution, UObject
+> headers, tagged script properties, reflection objects, UnrealScript bytecode decoding and class decompilation, asset
+> extraction, package rewriting and T3D level export are implemented and verified against all 2,426 packages of the
+> Mirror's Edge PC release; the tables also against upstream UELib (differential tests). See
 > [docs/development.md](docs/development.md#milestones).
 
 ## Features
@@ -30,6 +30,9 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
 * Differential tests against upstream C# UELib (opt-in, needs the .NET SDK).
 * Assets: textures (DXT1/3/5, BC5, ARGB, ... → PNG/TGA/DDS, including mips streamed from other packages), sounds (Ogg
   Vorbis), static meshes (OBJ), skeletal meshes (PSK), animations (PSA), material metadata (JSON).
+* Package writer (`PackageModel`, `write_package`): edit names/imports/exports/properties and re-lay out the file,
+  optionally zlib/LZO compressed.
+* T3D: parser, serializer, validation and level/object export ([docs/t3d.md](docs/t3d.md)).
 * Tools: `UnrealPackageInspector` (text or normalized JSON), `UnrealPackageValidator`, `UnrealScriptDecompiler` and
   `UnrealPackageExtractor`.
 

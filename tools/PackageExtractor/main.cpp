@@ -5,6 +5,7 @@
 //   static meshes: Wavefront OBJ (LOD 0); skeletal meshes: ActorX PSK (LOD 0, with skeleton and weights)
 //   animations: one ActorX PSA per AnimSet (all its sequences)
 //   materials: <Name>.mat.json (parent, parameters, textures; compiled shaders are not decoded)
+//   levels: <Package>/<Package>.t3d (the actors of every Level export, with their subobjects, as T3D text)
 //
 // Output: <output>/<Package>/<Outer path>/<Name>.<ext>. Mips streamed from other packages are found through the
 // search paths (default: the package's directory, recursively).
@@ -40,6 +41,7 @@ namespace
         bool meshes = true;
         bool animations = true;
         bool materials = true;
+        bool levels = true;
         std::string filter;
         bool quiet = false;
     };
@@ -200,6 +202,30 @@ namespace
         ++totals.written;
     }
 
+    /// Writes <Package>/<Package>.t3d if the package has a Level export (no-op otherwise).
+    void extract_levels(Linker& linker, const Package& package, const fs::path& root, const PropertySchema* schema,
+                        const Settings& settings, Totals& totals)
+    {
+        try
+        {
+            T3D::ExportOptions options;
+            options.schema = schema;
+            Diagnostics diagnostics;
+            const std::string text = T3D::serialize(T3D::export_level(linker, package, options, &diagnostics));
+            for (const Diagnostic& d : diagnostics.entries()) fmt::print(stderr, "warning: {}\n", d.message);
+            write_file(root / Tools::utf8_path(package.name()) / Tools::utf8_path(package.name() + ".t3d"),
+                       std::as_bytes(std::span(text)));
+            ++totals.written;
+            if (!settings.quiet) fmt::print("Level {}\n", package.name());
+        }
+        catch (const Error& e)
+        {
+            if (e.code() == ErrorCode::NotFound) return; // not a map
+            ++totals.failed;
+            fmt::print(stderr, "error: Level {}: {}\n", package.name(), e.what());
+        }
+    }
+
     void extract_sound(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root, Totals& totals)
     {
         const SoundWave sound = read_sound_wave(linker, ref);
@@ -224,7 +250,7 @@ int main(int argc, char** argv)
     std::string output;
     std::string profile;
     std::vector<std::string> search_paths;
-    std::vector<std::string> types{"textures", "sounds", "meshes", "animations", "materials"};
+    std::vector<std::string> types{"textures", "sounds", "meshes", "animations", "materials", "levels"};
     Settings settings;
 
     app.add_option("package", path, "Package file")->required()->check(CLI::ExistingFile);
@@ -233,8 +259,8 @@ int main(int argc, char** argv)
     app.add_option("-s,--search-path", search_paths,
                    "Directories with the game's packages (default: the package's directory and the nearest parent with Core.u)")
         ->check(CLI::ExistingDirectory);
-    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds, meshes, animations, materials")
-        ->check(CLI::IsMember({"textures", "sounds", "meshes", "animations", "materials"}))
+    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds, meshes, animations, materials, levels")
+        ->check(CLI::IsMember({"textures", "sounds", "meshes", "animations", "materials", "levels"}))
         ->delimiter(',');
     app.add_option("--texture-format", settings.texture_format, "png, tga or dds (dds keeps every mip losslessly)")
         ->check(CLI::IsMember({"png", "tga", "dds"}));
@@ -247,6 +273,7 @@ int main(int argc, char** argv)
     settings.meshes = std::find(types.begin(), types.end(), "meshes") != types.end();
     settings.animations = std::find(types.begin(), types.end(), "animations") != types.end();
     settings.materials = std::find(types.begin(), types.end(), "materials") != types.end();
+    settings.levels = std::find(types.begin(), types.end(), "levels") != types.end();
 
     try
     {
@@ -275,9 +302,10 @@ int main(int argc, char** argv)
         }
         for (const auto& dir : search_paths) linker.add_search_path(Tools::utf8_path(dir));
         const Package& package = linker.load(file);
-        // Type information for material parameter arrays: the script packages found through the search paths.
+        // Type information for material parameter arrays and level actors: the script packages found through the
+        // search paths.
         std::unique_ptr<ReflectionSchema> schema;
-        if (settings.materials)
+        if (settings.materials || settings.levels)
         {
             schema = std::make_unique<ReflectionSchema>(linker);
             for (const char* script : {"Core", "Engine", "GameFramework", "TdGame"})
@@ -334,6 +362,10 @@ int main(int argc, char** argv)
                 ++totals.failed;
                 fmt::print(stderr, "error: {} {}: {}\n", cls, object_path, e.what());
             }
+        }
+        if (settings.levels && settings.filter.empty())
+        {
+            extract_levels(linker, package, root, schema.get(), settings, totals);
         }
         fmt::print(stderr, "{} written, {} without data, {} failed\n", totals.written, totals.skipped, totals.failed);
         return totals.failed == 0 ? 0 : 1;

@@ -164,12 +164,14 @@ namespace UnrealLib
         ///
         /// The property owner is the export's class name. Class exports (null class) have no tagged properties: the
         /// result then holds only the header and `end_offset == header.properties_offset`.
+        /// @param object The export to read.
         /// @param schema Type information (nullptr: BuiltinPropertySchema).
         /// @throws Error (NotFound) if the class hierarchy cannot be determined; SerializationError on bad tags.
         [[nodiscard]] ObjectProperties read_properties(ObjectRef object, const PropertySchema* schema = nullptr);
 
         /// @brief Reads the reflection data of export @p object (class, state, function, struct, enum, const,
         ///        property or text buffer).
+        /// @param object The export to read.
         /// @param schema Type information for struct default properties (nullptr: BuiltinPropertySchema).
         /// @throws Error (InvalidArgument) if the export is not a reflection object; SerializationError on bad data.
         [[nodiscard]] FieldObject read_field(ObjectRef object, const PropertySchema* schema = nullptr);

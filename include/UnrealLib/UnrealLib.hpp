@@ -62,4 +62,5 @@
 #include <UnrealLib/Assets/StaticMesh.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
 
+#include <UnrealLib/T3D/T3D.hpp>
 #include <UnrealLib/Writer/PackageWriter.hpp>

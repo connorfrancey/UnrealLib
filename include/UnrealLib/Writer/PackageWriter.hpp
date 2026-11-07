@@ -101,8 +101,11 @@ namespace UnrealLib
 
     /// @brief Replaces the tagged properties of export @p index, keeping the bytes before them (the UObject header)
     ///        and after them (native data) unchanged.
+    /// @param model             The package being edited.
+    /// @param index             The export whose properties are replaced.
     /// @param properties_offset Offset of the first tag in the export data (ObjectProperties::header.properties_offset).
     /// @param properties_end    Offset just past the "None" tag (ObjectProperties::end_offset).
+    /// @param properties        The new property list (written with write_properties()).
     /// @throws Error (InvalidArgument) if the offsets are out of range.
     void replace_properties(PackageModel& model, ObjectIndex index, std::size_t properties_offset,
                             std::size_t properties_end, const std::vector<Property>& properties);
