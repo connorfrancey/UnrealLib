@@ -144,6 +144,16 @@ namespace UnrealLib
         return insert(std::make_unique<Package>(std::move(package)));
     }
 
+    std::optional<std::filesystem::path> Linker::find_package_file(std::string_view name) const
+    {
+        const auto it = m_index.find(std::string(name));
+        if (it == m_index.end())
+        {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
     const Package* Linker::find_package(std::string_view name)
     {
         if (const auto it = m_by_name.find(name); it != m_by_name.end())

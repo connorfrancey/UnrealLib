@@ -32,12 +32,14 @@ add_executable(UnrealLibTests
         Unit/Properties/PropertyTests.cpp
         Unit/Linker/LinkerTests.cpp
         Unit/Decompiler/DecompilerTests.cpp
+        Unit/Assets/AssetTests.cpp
         Fuzz/MutationTests.cpp
         Integration/MirrorsEdgeFixtureTests.cpp
         Integration/MirrorsEdgeLinkerTests.cpp
         Integration/MirrorsEdgePropertyTests.cpp
         Integration/MirrorsEdgeReflectionTests.cpp
         Integration/MirrorsEdgeDecompilerTests.cpp
+        Integration/MirrorsEdgeAssetTests.cpp
         Regression/ApprovalRegressionTests.cpp)
 
 target_link_libraries(UnrealLibTests PRIVATE

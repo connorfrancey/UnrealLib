@@ -50,3 +50,9 @@
 #include <UnrealLib/Decompiler/NativeTable.hpp>
 #include <UnrealLib/Decompiler/Statements.hpp>
 #include <UnrealLib/Linker/ReflectionSchema.hpp>
+
+#include <UnrealLib/Assets/AssetObject.hpp>
+#include <UnrealLib/Assets/BulkData.hpp>
+#include <UnrealLib/Assets/Image.hpp>
+#include <UnrealLib/Assets/Sound.hpp>
+#include <UnrealLib/Assets/Texture.hpp>

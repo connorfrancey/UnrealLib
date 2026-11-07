@@ -122,6 +122,9 @@ namespace UnrealLib
         /// @return nullptr if no such package is known or it failed to load (see diagnostics()).
         [[nodiscard]] const Package* find_package(std::string_view name);
 
+        /// @brief The file of the package named @p name known from the search paths (not loaded by this call).
+        [[nodiscard]] std::optional<std::filesystem::path> find_package_file(std::string_view name) const;
+
         /// @brief Number of packages currently loaded.
         [[nodiscard]] std::size_t loaded_count() const noexcept { return m_packages.size(); }
 
