@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include <UnrealLib/Assets/Animation.hpp>
 #include <UnrealLib/Assets/Image.hpp>
 #include <UnrealLib/Assets/SkeletalMesh.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
@@ -58,6 +59,9 @@ namespace
         std::size_t skeletal_bones = 0;
         std::size_t skeletal_vertices = 0;
         std::size_t skeletal_dumped = 0;
+        std::size_t anim_keys = 0;
+        std::map<std::string, std::size_t> anim_formats;
+        std::map<std::string, std::size_t> anim_set_bones;
         std::map<std::string, std::size_t> uv_sets;
 
         void fail(const std::string& cls, const std::string& path, const std::string& message)
@@ -187,6 +191,49 @@ namespace
                                    to_psk(package, mesh));
                     }
                 }
+                else if (cls == "AnimSequence")
+                {
+                    const AnimSequence seq = read_anim_sequence(linker, ref);
+                    ++tally.read[cls];
+                    ++tally.anim_formats[std::string(1, static_cast<char>('0' + static_cast<int>(seq.rotation_format)))];
+                    tally.anim_keys += seq.num_frames;
+                    // The decoded tracks must cover the byte stream exactly, and every rotation be a unit quaternion.
+                    if (seq.stream_bytes_used != seq.stream.size())
+                    {
+                        tally.fail(cls, linker.qualified_path(ref),
+                                   "tracks cover " + std::to_string(seq.stream_bytes_used) + " of " +
+                                       std::to_string(seq.stream.size()) + " bytes");
+                    }
+                    for (const auto& track : seq.tracks)
+                    {
+                        for (const auto& q : track.rotations)
+                        {
+                            const float len = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+                            if (std::abs(len - 1.0f) > 0.01f)
+                            {
+                                tally.fail(cls, linker.qualified_path(ref), "non-unit rotation");
+                                break;
+                            }
+                        }
+                    }
+                }
+                else if (cls == "AnimSet" || cls == "TdAnimSet")
+                {
+                    const AnimSet set = read_anim_set(linker, ref);
+                    ++tally.read[cls];
+                    tally.anim_set_bones[set.track_bone_names.empty() ? "empty" : "with bones"]++;
+                    // Every sequence of the set has one track per bone.
+                    for (const ObjectIndex s : set.sequences)
+                    {
+                        if (!s.is_export()) continue;
+                        const AnimSequence seq = read_anim_sequence(linker, ObjectRef{&package, s});
+                        if (seq.tracks.size() != set.track_bone_names.size())
+                        {
+                            tally.fail(cls, linker.qualified_path(ref), "sequence track count differs from bone count");
+                            break;
+                        }
+                    }
+                }
                 else if (cls == "TextureCube")
                 {
                     (void)read_texture_cube(linker, ref);
@@ -239,6 +286,7 @@ namespace
         print_map("sound bulk flags", tally.sound_flags);
         print_map("audio containers", tally.containers);
         print_map("static mesh UV sets", tally.uv_sets);
+        print_map("anim sets", tally.anim_set_bones);
         std::cout << "  static mesh vertices: " << tally.mesh_vertices << ", triangles: " << tally.mesh_triangles << '\n'
                   << "  skeletal mesh bones: " << tally.skeletal_bones << ", vertices: " << tally.skeletal_vertices
                   << '\n';
@@ -294,4 +342,5 @@ TEST(MirrorsEdgeAssetTests, FullCorpusAssets)
     report(tally);
     EXPECT_EQ(tally.total_failures, 0u);
 }
+
 

@@ -51,6 +51,7 @@
 #include <UnrealLib/Decompiler/Statements.hpp>
 #include <UnrealLib/Linker/ReflectionSchema.hpp>
 
+#include <UnrealLib/Assets/Animation.hpp>
 #include <UnrealLib/Assets/AssetObject.hpp>
 #include <UnrealLib/Assets/BulkData.hpp>
 #include <UnrealLib/Assets/Image.hpp>

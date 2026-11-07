@@ -3,6 +3,7 @@
 //   textures (Texture2D and subclasses): PNG (default), TGA, or DDS with every available mip (lossless)
 //   sounds (SoundNodeWave): the stored file as-is (Mirror's Edge PC: Ogg Vorbis)
 //   static meshes: Wavefront OBJ (LOD 0); skeletal meshes: ActorX PSK (LOD 0, with skeleton and weights)
+//   animations: one ActorX PSA per AnimSet (all its sequences)
 //
 // Output: <output>/<Package>/<Outer path>/<Name>.<ext>. Mips streamed from other packages are found through the
 // search paths (default: the package's directory, recursively).
@@ -34,6 +35,7 @@ namespace
         bool textures = true;
         bool sounds = true;
         bool meshes = true;
+        bool animations = true;
         std::string filter;
         bool quiet = false;
     };
@@ -139,6 +141,23 @@ namespace
         ++totals.written;
     }
 
+    void extract_anim_set(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root, Totals& totals)
+    {
+        const AnimSet set = read_anim_set(linker, ref);
+        std::vector<AnimSequence> sequences;
+        for (const ObjectIndex s : set.sequences)
+        {
+            if (s.is_export()) sequences.push_back(read_anim_sequence(linker, ObjectRef{&package, s}));
+        }
+        if (set.track_bone_names.empty() || sequences.empty())
+        {
+            ++totals.skipped;
+            return;
+        }
+        write_file(output_path(root, package, ref.index, "psa"), to_psa(set, sequences));
+        ++totals.written;
+    }
+
     void extract_sound(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root, Totals& totals)
     {
         const SoundWave sound = read_sound_wave(linker, ref);
@@ -155,7 +174,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    CLI::App app{"Extract assets (textures, sounds, meshes) from an Unreal Engine 3 package (UnrealLib)",
+    CLI::App app{"Extract assets (textures, sounds, meshes, animations) from an Unreal Engine 3 package (UnrealLib)",
                  "UnrealPackageExtractor"};
     argv = app.ensure_utf8(argv);
 
@@ -163,17 +182,17 @@ int main(int argc, char** argv)
     std::string output;
     std::string profile;
     std::vector<std::string> search_paths;
-    std::vector<std::string> types{"textures", "sounds", "meshes"};
+    std::vector<std::string> types{"textures", "sounds", "meshes", "animations"};
     Settings settings;
 
     app.add_option("package", path, "Package file")->required()->check(CLI::ExistingFile);
     app.add_option("-o,--output", output, "Output directory")->required();
     app.add_option("--profile", profile, "Game profile id or name (default: auto-detect)");
     app.add_option("-s,--search-path", search_paths,
-                   "Directories with the packages that hold streamed texture mips (default: the package's directory)")
+                   "Directories with the game's packages (default: the package's directory and the nearest parent with Core.u)")
         ->check(CLI::ExistingDirectory);
-    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds, meshes")
-        ->check(CLI::IsMember({"textures", "sounds", "meshes"}))
+    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds, meshes, animations")
+        ->check(CLI::IsMember({"textures", "sounds", "meshes", "animations"}))
         ->delimiter(',');
     app.add_option("--texture-format", settings.texture_format, "png, tga or dds (dds keeps every mip losslessly)")
         ->check(CLI::IsMember({"png", "tga", "dds"}));
@@ -184,6 +203,7 @@ int main(int argc, char** argv)
     settings.textures = std::find(types.begin(), types.end(), "textures") != types.end();
     settings.sounds = std::find(types.begin(), types.end(), "sounds") != types.end();
     settings.meshes = std::find(types.begin(), types.end(), "meshes") != types.end();
+    settings.animations = std::find(types.begin(), types.end(), "animations") != types.end();
 
     try
     {
@@ -193,7 +213,22 @@ int main(int argc, char** argv)
         Linker linker(options);
         if (search_paths.empty())
         {
-            linker.add_search_path(fs::absolute(file).parent_path());
+            // Default: the package's directory; if the script packages (Core.u) are not below it, the nearest parent
+            // directory that has them (e.g. CookedPC for CookedPC/Animations/X.upk), so class hierarchies resolve.
+            fs::path dir = fs::absolute(file).parent_path();
+            linker.add_search_path(dir);
+            for (int up = 0; up < 4 && !linker.find_package_file("Core") && dir.has_parent_path() &&
+                             dir.parent_path() != dir;
+                 ++up)
+            {
+                dir = dir.parent_path();
+                if (fs::exists(dir / "Core.u")) linker.add_search_path(dir);
+            }
+            if (!linker.find_package_file("Core"))
+            {
+                fmt::print(stderr, "warning: Core.u not found; pass --search-path <CookedPC> so that subclasses "
+                                   "(e.g. TdAnimSet) and streamed texture mips are found\n");
+            }
         }
         for (const auto& dir : search_paths) linker.add_search_path(Tools::utf8_path(dir));
         const Package& package = linker.load(file);
@@ -214,7 +249,9 @@ int main(int argc, char** argv)
             const bool sound = settings.sounds && cls == "SoundNodeWave";
             const bool mesh = settings.meshes && cls == "StaticMesh";
             const bool skeletal = settings.meshes && cls == "SkeletalMesh";
-            if (!texture && !sound && !mesh && !skeletal)
+            const bool anim_set =
+                settings.animations && (cls == "AnimSet" || linker.is_a(ref, "Engine.AnimSet").value_or(false));
+            if (!texture && !sound && !mesh && !skeletal && !anim_set)
             {
                 continue;
             }
@@ -229,6 +266,7 @@ int main(int argc, char** argv)
                 if (texture) extract_texture(linker, package, ref, root, settings, totals);
                 else if (mesh) extract_static_mesh(linker, package, ref, root, totals);
                 else if (skeletal) extract_skeletal_mesh(linker, package, ref, root, totals);
+                else if (anim_set) extract_anim_set(linker, package, ref, root, totals);
                 else extract_sound(linker, package, ref, root, totals);
                 if (!settings.quiet && totals.written != before)
                 {

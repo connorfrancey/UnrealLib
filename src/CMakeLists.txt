@@ -108,6 +108,7 @@ unreallib_add_module(Decompiler
 
 unreallib_add_module(Assets
         SOURCES
+            Assets/Animation.cpp
             Assets/AssetObject.cpp
             Assets/BulkData.cpp
             Assets/Image.cpp
