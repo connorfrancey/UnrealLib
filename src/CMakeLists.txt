@@ -1,6 +1,6 @@
 # ----------------------------------------------------------------------------------------------------------------------
 # UnrealLib modules. Dependency order (no cycles):
-#   Core -> Utilities -> Serialization -> Names -> Package -> Objects, Properties -> Linker
+#   Core -> Utilities -> Serialization -> Names -> Package -> Objects, Properties -> Linker -> Decompiler
 # Sources are listed explicitly; add new files here when a module grows.
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -93,6 +93,18 @@ unreallib_add_module(Linker
             UnrealLib::Properties
             UnrealLib::Reflection)
 
+unreallib_add_module(Decompiler
+        SOURCES
+            Decompiler/Decompiler.cpp
+            Decompiler/NativeTable.cpp
+            Decompiler/Printer.cpp
+            Decompiler/Printer.hpp
+            Decompiler/Statements.cpp
+        PUBLIC_DEPS
+            UnrealLib::Bytecode
+            UnrealLib::Linker
+            UnrealLib::Reflection)
+
 # Umbrella target: link this to get the whole library.
 add_library(unreallib INTERFACE)
 add_library(UnrealLib::UnrealLib ALIAS unreallib)
@@ -106,4 +118,5 @@ target_link_libraries(unreallib INTERFACE
         UnrealLib::Properties
         UnrealLib::Bytecode
         UnrealLib::Reflection
-        UnrealLib::Linker)
+        UnrealLib::Linker
+        UnrealLib::Decompiler)

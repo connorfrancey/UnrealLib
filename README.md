@@ -5,9 +5,9 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
 
 > **Status: early (milestones M0–M5).** Package summaries, compression, name/import/export/depends tables, game
 > profiles, structural validation, cross-package import resolution, UObject headers, tagged script properties (typed
-> values, structs, arrays, byte-exact rewriting), reflection objects and UnrealScript bytecode decoding are implemented
+> values, structs, arrays, byte-exact rewriting), reflection objects, UnrealScript bytecode decoding and decompilation of functions and states are implemented
 > and verified against all 2,426 packages of the Mirror's Edge PC release; the tables also against upstream UELib
-> (differential tests). Decompilation, asset extraction, T3D and package writing are **not implemented yet** — see
+> (differential tests). Class-level decompilation, asset extraction, T3D and package writing are **not implemented yet** — see
 > [docs/development.md](docs/development.md#milestones).
 
 ## Features
@@ -25,6 +25,8 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
   rewriting, type information from the game's own script packages (`ReflectionSchema`).
 * Reflection objects (`UClass`, `UStruct`, `UFunction`, `UState`, `UEnum`, `UConst`, properties, text buffers) and an
   UnrealScript bytecode decoder with the Mirror's Edge token map.
+* Decompiler for functions and states: expressions with operator precedence, if/else, loops (`for`, `while`,
+  `do`/`until`, `foreach`), `switch`, break/continue; native function table built from the game itself.
 * Differential tests against upstream C# UELib (opt-in, needs the .NET SDK).
 * Tools: `UnrealPackageInspector` (text or normalized JSON) and `UnrealPackageValidator`.
 
@@ -82,6 +84,7 @@ Tests, tools and examples are off by default for consumers; only fmt, spdlog and
 * [Supported versions & Mirror's Edge verification](docs/supported_versions.md)
 * [Serialization](docs/serialization.md)
 * [Package format](docs/package_format.md)
+* [Decompiler](docs/decompiler.md)
 * [Development guide (build options, testing, milestones, limitations)](docs/development.md)
 * API reference: configure with `-DUNREALLIB_BUILD_DOCS=ON` and build `unreallib_docs` (Doxygen).
 

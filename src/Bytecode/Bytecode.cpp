@@ -230,6 +230,18 @@ namespace UnrealLib
                 }
             }
 
+            // Reads the EndFunctionParms terminating an intrinsic's operands; anything else is an error (reading a
+            // statement as the terminator would silently drop it).
+            void expect_end_parms(std::size_t depth)
+            {
+                const std::uint32_t end = next(depth + 1);
+                if (m_script.tokens[end].kind != TokenKind::EndFunctionParms)
+                {
+                    fail(fmt::format("expected EndFunctionParms, found {} at memory offset 0x{:X}",
+                                     to_string(m_script.tokens[end].kind), m_script.tokens[end].memory_offset));
+                }
+            }
+
             void array_method(std::uint32_t index, std::size_t depth, int params_after_skip, std::uint16_t skip_version)
             {
                 add_child(index, depth);
@@ -243,7 +255,7 @@ namespace UnrealLib
                 }
                 if (m_version >= vEndTokenAppendedToArrayIntrinsics)
                 {
-                    (void)next(depth + 1); // EndFunctionParms
+                    expect_end_parms(depth);
                 }
                 maybe_debug(index, depth);
             }
@@ -564,7 +576,12 @@ namespace UnrealLib
                 case TokenKind::DynamicArrayAdd:
                     add_child(index, depth);
                     add_child(index, depth);
-                    (void)next(depth + 1); // EndFunctionParms
+                    // Upstream UELib reads EndFunctionParms here for every version, but Mirror's Edge (536) has none:
+                    // the next statement follows the count directly. Gated like the other array intrinsics.
+                    if (m_version >= vEndTokenAppendedToArrayIntrinsics)
+                    {
+                        expect_end_parms(depth);
+                    }
                     maybe_debug(index, depth);
                     break;
 

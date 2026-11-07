@@ -46,4 +46,7 @@
 #include <UnrealLib/Reflection/Fields.hpp>
 
 #include <UnrealLib/Linker/Linker.hpp>
+#include <UnrealLib/Decompiler/Decompiler.hpp>
+#include <UnrealLib/Decompiler/NativeTable.hpp>
+#include <UnrealLib/Decompiler/Statements.hpp>
 #include <UnrealLib/Linker/ReflectionSchema.hpp>
