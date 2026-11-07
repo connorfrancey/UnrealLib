@@ -5,8 +5,11 @@
 ///        Polys reference).
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <UnrealLib/Assets/AssetObject.hpp>
@@ -45,6 +48,8 @@ namespace UnrealLib::Assets
         ObjectIndex element_owner;      ///< ElementOwner (version >= 321): owner of the polygon array — the Polys
                                         ///< itself in most Mirror's Edge packages, the outer Model in others.
         std::vector<Poly> elements;     ///< Polygons.
+        std::int32_t max = 0;           ///< Array capacity as stored (written as max(max, element count)).
+        std::size_t native_offset = 0;  ///< Offset of the native data (the element count) in the export data.
     };
 
     /// @brief FBspSurf: a BSP surface (56 bytes in version 536).
@@ -103,6 +108,15 @@ namespace UnrealLib::Assets
     /// @throws Error (InvalidArgument) if @p object is not a Polys; UnsupportedError for layouts that were not
     ///         verified (version < 78: PanU/PanV; version >= 600: Lightmass settings); SerializationError on bad data or trailing bytes.
     [[nodiscard]] Polys read_polys(Linker& linker, ObjectRef object, const PropertySchema* schema = nullptr);
+
+    /// @brief Serializes the native data of a Polys export (everything from the element count on), the inverse
+    ///        of read_polys(): writing an unmodified Polys reproduces its native bytes exactly.
+    /// @param polys     The polygons.
+    /// @param context   Version information (the package's file version).
+    /// @param make_name Returns the FName of an ItemName text in the target package's name table.
+    /// @throws UnsupportedError for the file versions read_polys() rejects.
+    [[nodiscard]] std::vector<std::byte> write_polys(const Polys& polys, const SerializationContext& context,
+                                                     const std::function<FName(std::string_view)>& make_name);
 
     /// @brief Reads the leading part of a Model export (see Model).
     /// @param linker Resolves the class hierarchy.

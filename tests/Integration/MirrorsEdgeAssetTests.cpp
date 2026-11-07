@@ -255,6 +255,27 @@ namespace
                     {
                         tally.fail(cls, linker.qualified_path(ref), "ElementOwner is not the outer Model");
                     }
+                    // write_polys() must reproduce the native bytes exactly.
+                    const auto make_name = [&](std::string_view text) {
+                        const std::size_t u = text.rfind('_');
+                        if (u != std::string_view::npos && u + 1 < text.size() && text[u + 1] != '0' &&
+                            text.find_first_not_of("0123456789", u + 1) == std::string_view::npos)
+                        {
+                            if (const auto base = package.names().find(text.substr(0, u)))
+                            {
+                                return FName{*base, std::stoi(std::string(text.substr(u + 1))) + 1};
+                            }
+                        }
+                        return FName{package.names().find(text).value_or(-1), 0};
+                    };
+                    const std::vector<std::byte> written =
+                        write_polys(polys, package.context(), make_name);
+                    const auto data = package.export_data(i);
+                    if (polys.native_offset > data.size() ||
+                        !std::ranges::equal(written, data.subspan(polys.native_offset)))
+                    {
+                        tally.fail(cls, linker.qualified_path(ref), "write_polys does not reproduce the data");
+                    }
                     for (const Poly& p : polys.elements)
                     {
                         const float len = p.normal.x * p.normal.x + p.normal.y * p.normal.y + p.normal.z * p.normal.z;

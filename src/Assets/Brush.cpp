@@ -1,10 +1,13 @@
 #include <UnrealLib/Assets/Brush.hpp>
 
+#include <algorithm>
+
 #include <fmt/format.h>
 
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Names/FName.hpp>
 #include <UnrealLib/Names/NameTable.hpp>
+#include <UnrealLib/Serialization/BinaryWriter.hpp>
 #include <UnrealLib/Utilities/Text.hpp>
 
 #include "MeshReading.hpp"
@@ -74,6 +77,35 @@ namespace UnrealLib::Assets
             return p;
         }
 
+        void write_vec3(BinaryWriter& w, const Vec3& v)
+        {
+            w.write_f32(v.x);
+            w.write_f32(v.y);
+            w.write_f32(v.z);
+        }
+
+        void write_poly(BinaryWriter& w, const Poly& p, const std::function<FName(std::string_view)>& make_name)
+        {
+            const std::uint16_t version = w.context().file_version;
+            if (version < kVerticesToArray) w.write_compact_index(static_cast<std::int32_t>(p.vertices.size()));
+            write_vec3(w, p.base);
+            write_vec3(w, p.normal);
+            write_vec3(w, p.texture_u);
+            write_vec3(w, p.texture_v);
+            if (version >= kVerticesToArray) w.write_i32(static_cast<std::int32_t>(p.vertices.size()));
+            for (const Vec3& v : p.vertices) write_vec3(w, v);
+            w.write_u32(p.poly_flags);
+            w.write_i32(p.actor.value);
+            if (version < kTextureReplacedByMaterial) w.write_i32(p.material.value);
+            write_fname(w, make_name(p.item_name));
+            if (version >= kTextureReplacedByMaterial) w.write_i32(p.material.value);
+            w.write_index(p.link);
+            w.write_index(p.brush_poly);
+            if (version >= kLightMapScaleAdded && version < kShadowMapScaleAdded) w.write_f32(p.light_map_scale);
+            if (version >= kShadowMapScaleAdded) w.write_f32(p.shadow_map_scale);
+            if (version >= kLightingChannelsAdded) w.write_u32(p.lighting_channels);
+        }
+
         BspSurface read_surface(BinaryReader& r)
         {
             BspSurface s;
@@ -112,12 +144,14 @@ namespace UnrealLib::Assets
         }
         Polys polys;
         polys.name = object.package->object_name(object.index);
+        polys.native_offset = source.native_offset;
         const std::int32_t num = r.read_i32();
         const std::int32_t max = r.read_i32();
         if (num < 0 || max < num)
         {
             throw SerializationError(fmt::format("Polys with Num={} Max={}", num, max), r.absolute_position());
         }
+        polys.max = max;
         if (version >= kElementOwnerAdded) polys.element_owner = ObjectIndex{r.read_i32()};
         if (static_cast<std::uint64_t>(num) * kMinPolySize > r.remaining())
         {
@@ -127,6 +161,23 @@ namespace UnrealLib::Assets
         for (std::int32_t i = 0; i < num; ++i) polys.elements.push_back(read_poly(r, object.package->names()));
         expect_end(r, linker.qualified_path(object));
         return polys;
+    }
+
+    std::vector<std::byte> write_polys(const Polys& polys, const SerializationContext& context,
+                                       const std::function<FName(std::string_view)>& make_name)
+    {
+        const std::uint16_t version = context.file_version;
+        if (version < kPanUVRemoved || version >= kLightmassAdded)
+        {
+            throw UnsupportedError(fmt::format("FPoly layout of file version {} is not supported", version));
+        }
+        BinaryWriter w(context);
+        const auto num = static_cast<std::int32_t>(polys.elements.size());
+        w.write_i32(num);
+        w.write_i32(std::max(polys.max, num));
+        if (version >= kElementOwnerAdded) w.write_i32(polys.element_owner.value);
+        for (const Poly& p : polys.elements) write_poly(w, p, make_name);
+        return w.take();
     }
 
     Model read_model(Linker& linker, ObjectRef object, const PropertySchema* schema)

@@ -30,6 +30,7 @@ add_executable(UnrealLibTests
         Unit/Package/PackageSummaryTests.cpp
         Unit/Objects/ObjectHeaderTests.cpp
         Unit/Properties/PropertyTests.cpp
+        Unit/Properties/PropertyTextTests.cpp
         Unit/Linker/LinkerTests.cpp
         Unit/Decompiler/DecompilerTests.cpp
         Unit/Assets/AssetTests.cpp

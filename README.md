@@ -3,10 +3,10 @@
 A native C++20 library for reading Unreal Engine 3 packages, ported from the behaviour of
 [UELib](https://github.com/EliotVU/Unreal-Library) (C#). The first target is **Mirror's Edge (2008), PC**.
 
-> **Status: milestones M0–M7 done, M8 (package writer, T3D) in progress.** Package summaries, compression,
+> **Status: milestones M0â€“M8 done; M9 (stabilization) next.** Package summaries, compression,
 > name/import/export/depends tables, game profiles, structural validation, cross-package import resolution, UObject
 > headers, tagged script properties, reflection objects, UnrealScript bytecode decoding and class decompilation, asset
-> extraction, package rewriting and T3D level export are implemented and verified against all 2,426 packages of the
+> extraction, package rewriting and T3D level export/import are implemented and verified against all 2,426 packages of the
 > Mirror's Edge PC release; the tables also against upstream UELib (differential tests). See
 > [docs/development.md](docs/development.md#milestones).
 
@@ -32,9 +32,10 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
   Vorbis), static meshes (OBJ), skeletal meshes (PSK), animations (PSA), material metadata (JSON).
 * Package writer (`PackageModel`, `write_package`): edit names/imports/exports/properties and re-lay out the file,
   optionally zlib/LZO compressed.
-* T3D: parser, serializer, validation and level/object export, including brush geometry ([docs/t3d.md](docs/t3d.md)).
-* Tools: `UnrealPackageInspector` (text or normalized JSON), `UnrealPackageValidator`, `UnrealScriptDecompiler` and
-  `UnrealPackageExtractor`.
+* T3D: parser, serializer, validation, level/object export including brush geometry, and import of edited levels
+  back into packages ([docs/t3d.md](docs/t3d.md)).
+* Tools: `UnrealPackageInspector` (text or normalized JSON), `UnrealPackageValidator`, `UnrealScriptDecompiler`,
+  `UnrealPackageExtractor` and `UnrealT3DImporter`.
 
 ## Quick start
 

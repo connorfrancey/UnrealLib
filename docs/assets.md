@@ -15,7 +15,7 @@ consumed **exactly**: a reader that stops early or runs past the export is an er
 | SkeletalMesh | `read_skeletal_mesh` | ActorX PSK | 742 parse; 19,540 bones, 1.8M vertices; every vertex's weights sum to 255; all bone/index references in range |
 | AnimSequence | `read_anim_sequence` | ActorX PSA (per AnimSet) | 6,938 decode; decoded tracks cover each compressed byte stream exactly; all rotations unit length |
 | AnimSet, TdAnimSet | `read_anim_set` | — | 679 parse; for all 560 populated sets each sequence has one track per bone |
-| Polys | `read_polys` | T3D `Begin PolyList` (via T3D export) | 9,392 parse exactly (65,005 polygons); every polygon has ≥ 3 vertices and a unit normal; ElementOwner is the Polys itself or its outer Model |
+| Polys | `read_polys`, `write_polys` | T3D `Begin PolyList` (via T3D export/import) | 9,392 parse exactly (65,005 polygons) and `write_polys` reproduces every one byte for byte; every polygon has ≥ 3 vertices and a unit normal; ElementOwner is the Polys itself or its outer Model |
 | Model | `read_model` (up to the Polys reference) | — | 9,392 parse (41,850 BSP surfaces, zones included); every surface indexes the decoded points/vectors; the Polys reference is a Polys |
 | Material, MaterialInstanceConstant, MaterialInstanceTimeVarying | `read_material` | JSON metadata | 29,392 read with a ReflectionSchema; every parameter array decodes (21,821 parameters, 84,137 texture references, 391,680 expressions) |
 

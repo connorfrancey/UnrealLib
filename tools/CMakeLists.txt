@@ -19,3 +19,4 @@ unreallib_add_tool(unreallib_package_inspector UnrealPackageInspector PackageIns
 unreallib_add_tool(unreallib_package_validator UnrealPackageValidator PackageValidator/main.cpp)
 unreallib_add_tool(unreallib_script_decompiler UnrealScriptDecompiler ScriptDecompiler/main.cpp)
 unreallib_add_tool(unreallib_package_extractor UnrealPackageExtractor PackageExtractor/main.cpp)
+unreallib_add_tool(unreallib_t3d_importer UnrealT3DImporter T3DImporter/main.cpp)

@@ -229,6 +229,53 @@ namespace UnrealLib
     /// @brief Formats a value in UnrealScript defaultproperties syntax (e.g. `(X=1.0,Y=2.0,Z=0.0)`, `"text"`).
     [[nodiscard]] std::string format_property_value(const PropertyValue& value, const PropertyFormatOptions& options);
 
+    /// @brief Inputs for parsing property text (parse_property_value()).
+    struct PropertyParseOptions
+    {
+        /// Returns the FName for a name text, adding it to the package's name table if needed (required).
+        std::function<FName(std::string_view)> make_name;
+        /// Resolves an object reference as written by format_property_value() (anything but `None`); nullopt if the
+        /// object is unknown (required for object and delegate values).
+        std::function<std::optional<ObjectIndex>(std::string_view)> resolve_object;
+        /// Struct layouts for values that have no template (new struct fields, elements of empty arrays);
+        /// nullptr = BuiltinPropertySchema.
+        const PropertySchema* schema = nullptr;
+    };
+
+    /// @brief Parses text in format_property_value() syntax into a value shaped like @p like.
+    ///
+    /// The template decides the type: its variant alternative, struct encoding, field tags, string encoding and the
+    /// type of array elements (taken from the existing elements). Struct fields are matched by name and index;
+    /// a tagged struct keeps only the fields present in the text (new fields need a struct layout in the schema),
+    /// a binary struct keeps the template value of omitted fields. Raw values only accept their own raw notation.
+    /// parse_property_value(format_property_value(v), v) serializes like v for every value, NaN payloads included
+    /// (format_property_value() writes NaNs other than the default quiet ones as `nan(0xBITS)`).
+    /// @param text Value text (`1.5`, `"str"`, `(X=1.0,Y=2.0,Z=3.0)`, `Class'Pkg.Obj'`, ...).
+    /// @param like Template value.
+    /// @param type Type of @p like, if known: used for elements of an empty array and new struct fields.
+    /// @param options Name and object resolution.
+    /// @throws Error (InvalidData) if the text does not match the type, or a name/reference cannot be resolved.
+    [[nodiscard]] PropertyValue parse_property_value(std::string_view text, const PropertyValue& like,
+                                                     const PropertyParseOptions& options,
+                                                     const TypeDesc* type = nullptr);
+
+    /// @brief Parses text into a value of type @p type (see the template overload).
+    /// @throws Error (InvalidData) as the template overload; UnsupportedError for Map, FixedArray, Pointer and
+    ///         Unknown types.
+    [[nodiscard]] PropertyValue parse_property_value(std::string_view text, const TypeDesc& type,
+                                                     const PropertyParseOptions& options);
+
+    /// @brief The default value of @p type (zero, False, None, empty string/array; binary structs get every
+    ///        field of their layout, tagged structs no fields).
+    /// @throws UnsupportedError for Map, FixedArray, Pointer and Unknown types.
+    [[nodiscard]] PropertyValue default_property_value(const TypeDesc& type, const PropertyParseOptions& options);
+
+    /// @brief A property tag for a new property or tagged struct field of type @p type (size is recomputed when
+    ///        written).
+    /// @throws UnsupportedError for Unknown types.
+    [[nodiscard]] PropertyTag make_property_tag(std::string_view name, std::int32_t array_index, const TypeDesc& type,
+                                                const std::function<FName(std::string_view)>& make_name);
+
     /// @brief Finds the first property named @p name (case-insensitive) with array index @p array_index.
     [[nodiscard]] const Property* find_property(const std::vector<Property>& properties, std::string_view name,
                                                 std::int32_t array_index = 0);

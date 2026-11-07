@@ -1,5 +1,8 @@
 #include <UnrealLib/Properties/PropertyValue.hpp>
 
+#include <bit>
+#include <cmath>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -541,6 +544,14 @@ namespace UnrealLib
     {
         std::string format_float(float value)
         {
+            if (std::isnan(value))
+            {
+                // Lossless: the default quiet NaNs as nan / -nan, any other payload with its bits.
+                const auto bits = std::bit_cast<std::uint32_t>(value);
+                if (bits == 0x7FC00000u) return "nan";
+                if (bits == 0xFFC00000u) return "-nan";
+                return fmt::format("nan(0x{:08X})", bits);
+            }
             std::string text = fmt::format("{}", value);
             if (text.find_first_of(".eEn") == std::string::npos)
             {

@@ -1,6 +1,6 @@
 # ----------------------------------------------------------------------------------------------------------------------
 # UnrealLib modules. Dependency order (no cycles):
-#   Core -> Utilities -> Serialization -> Names -> Package -> Objects, Properties -> Linker -> Decompiler, Assets; Package, Properties -> Writer; Assets, Linker -> T3D
+#   Core -> Utilities -> Serialization -> Names -> Package -> Objects, Properties -> Linker -> Decompiler, Assets; Package, Properties -> Writer; Assets, Linker, Writer -> T3D
 # Sources are listed explicitly; add new files here when a module grows.
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -65,6 +65,7 @@ unreallib_add_module(Objects
 unreallib_add_module(Properties
         SOURCES
             Properties/PropertyTag.cpp
+            Properties/PropertyText.cpp
             Properties/PropertyValue.cpp
         PUBLIC_DEPS
             UnrealLib::Package)
@@ -136,7 +137,8 @@ unreallib_add_module(T3D
         PUBLIC_DEPS
             UnrealLib::Assets
             UnrealLib::Linker
-            UnrealLib::Properties)
+            UnrealLib::Properties
+            UnrealLib::Writer)
 
 # Umbrella target: link this to get the whole library.
 add_library(unreallib INTERFACE)

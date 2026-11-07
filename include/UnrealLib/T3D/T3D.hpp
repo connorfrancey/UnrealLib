@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief T3D ("Text 3D"): the editor's text format for maps, actors and objects — document model, parser,
-///        serializer, validation, and export of package objects.
+///        serializer, validation, export of package objects, and import of edited documents into a PackageModel.
 ///
 /// Grammar (line based, as written by UnrealEd):
 ///
@@ -28,6 +28,7 @@
 
 #include <UnrealLib/Core/Diagnostics.hpp>
 #include <UnrealLib/Linker/Linker.hpp>
+#include <UnrealLib/Writer/PackageWriter.hpp>
 
 namespace UnrealLib::T3D
 {
@@ -122,4 +123,47 @@ namespace UnrealLib::T3D
     /// @throws Error (NotFound) if the package has no Level export.
     [[nodiscard]] T3DDocument export_level(Linker& linker, const Package& package, const ExportOptions& options = {},
                                            Diagnostics* diagnostics = nullptr);
+
+    /// @brief Options for import_document().
+    struct ImportOptions
+    {
+        /// Type information: decides the types of properties and struct fields that the objects do not have yet
+        /// (pass the ReflectionSchema used for the export).
+        const PropertySchema* schema = nullptr;
+    };
+
+    /// @brief What import_document() did.
+    struct ImportResult
+    {
+        std::size_t objects = 0;          ///< Actor/Object blocks matched to exports.
+        std::size_t modified = 0;         ///< Exports whose tagged properties were rewritten.
+        std::size_t brushes_modified = 0; ///< Polys exports whose polygons were rewritten.
+        std::size_t skipped = 0;          ///< Blocks or properties not applied (each one reported as a warning).
+    };
+
+    /// @brief Applies an edited T3D document (as produced by export_level()) to @p model, a PackageModel made from
+    ///        @p package with PackageModel::from_package() and not yet modified.
+    ///
+    /// Blocks are matched to existing exports by path: `Begin Level NAME=` to the Level export, `Begin Actor Name=`
+    /// to the level's export of that name, `Begin Object Name=` to the enclosing object's subobject, `Begin Brush
+    /// Name=` to the enclosing actor's Model. For each matched object the tagged properties are rebuilt from the
+    /// block: existing properties keep their tags and position, properties missing from the block are removed (as
+    /// in UnrealEd, an absent property means its default), new ones get tags from @p options.schema. Values are
+    /// parsed with parse_property_value(); references use export_object()'s notation (bare subobject names,
+    /// `Class'Package.Path'`). Only exports whose property list actually changes are rewritten (with
+    /// replace_properties()), so importing an unmodified export writes nothing.
+    ///
+    /// Brush polygons are rewritten (write_polys()) when a `Polygon` block differs from the exported text of the
+    /// stored polygon; unchanged polygons keep their exact stored values (the T3D text has 6 decimals). The BSP of
+    /// the Model is not rebuilt.
+    ///
+    /// Problems are reported to @p diagnostics as warnings and the affected block or property is skipped:
+    /// blocks naming objects that do not exist (`t3d.import-new-object`: creating objects is not supported),
+    /// class mismatches (`t3d.import-class-mismatch`), properties without type information
+    /// (`t3d.import-unknown-property`), unparsable values or unresolved references (`t3d.import-failed`, the whole
+    /// object is left unchanged).
+    /// @throws Error (NotFound) if a Map's Level block names no Level export.
+    ImportResult import_document(PackageModel& model, Linker& linker, const Package& package,
+                                 const T3DDocument& document, const ImportOptions& options = {},
+                                 Diagnostics* diagnostics = nullptr);
 }

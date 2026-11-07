@@ -62,7 +62,7 @@ Presets: `msvc-x64-debug`, `msvc-x64-release`, `msvc-x86-debug`, `msvc-x86-relea
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `UNREALLIB_BUILD_TESTS` | top-level | GoogleTest suite |
-| `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator`, `UnrealScriptDecompiler`, `UnrealPackageExtractor` |
+| `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator`, `UnrealScriptDecompiler`, `UnrealPackageExtractor`, `UnrealT3DImporter` |
 | `UNREALLIB_BUILD_EXAMPLES` | top-level | examples |
 | `UNREALLIB_BUILD_BENCHMARKS` | OFF | (no benchmarks yet) |
 | `UNREALLIB_BUILD_DOCS` | OFF | `unreallib_docs` Doxygen target |
@@ -207,7 +207,7 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 | M5 | Reflection (`UField`/`UStruct`/`UClass`/`UFunction`/`UState`/`UEnum`/`UConst`), bytecode decoder + IR | **done** (verified on 2426 packages: every reflection export consumes its data exactly; 13,770 scripts / 477,343 tokens end exactly at ScriptSize) |
 | M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
 | M7 | Assets (textures, sound, meshes, materials, animation) + PackageExtractor | **done** (every texture, sound, static/skeletal mesh, animation and material of the game; see [assets.md](assets.md)) |
-| M8 | T3D, package writer, LZO compression | **in progress** — writer: all 873 uncompressed packages rewritten byte-identically, all 1,553 compressed ones reload with identical tables and export bytes, LZO encoder; T3D: parser/serializer/validation, level export verified on all 680 levels (152,965 actors, 7,958 brushes / 48,103 polygons, 2,880,268 properties, 0 raw values, text round trip exact; see [t3d.md](t3d.md)); brush geometry: `read_polys`/`read_model` on all 9,392 Polys/Model exports. Remaining: T3D import into packages |
+| M8 | T3D, package writer, LZO compression | **done** — writer: all 873 uncompressed packages rewritten byte-identically, all 1,553 compressed ones reload with identical tables and export bytes, LZO encoder; T3D: parser/serializer/validation, level export verified on all 680 levels (152,965 actors, 7,958 brushes / 48,103 polygons, 2,880,354 properties, 0 raw values, text round trip exact; see [t3d.md](t3d.md)); T3D import (`import_document`, `parse_property_value`, `UnrealT3DImporter`): every level's unmodified export imports back with 0 changes (338,507 objects), edits round-trip through write → reload → export; brush geometry: `read_polys`/`write_polys` (byte-exact) and `read_model` on all 9,392 Polys/Model exports |
 | M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | |
 
 ### Next concrete tasks
@@ -232,8 +232,8 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 * Thumbnail and import/export GUID tables (≥ 584 / ≥ 623) are detected but not parsed.
 * Big-endian (console) packages are handled by the archive layer and summary round-trip tests but not verified
   against real console packages, and no built-in profile accepts them.
-* T3D export covers tagged properties, subobjects and brush geometry (not the level BSP tree); T3D import into
-  packages is not implemented (see [t3d.md](t3d.md)).
+* T3D export covers tagged properties, subobjects and brush geometry (not the level BSP tree); T3D import modifies
+  existing objects only (no new actors/imports) and does not rebuild BSP (see [t3d.md](t3d.md)).
 * No install rules / CMake package config yet.
 * Differential comparison against upstream UELib covers the package summary and the name/import/export/depends
   tables only; property values, reflection data and bytecode are verified by UnrealLib's own corpus sweeps. Upstream cannot read compressed packages' tables, so for the 1553
