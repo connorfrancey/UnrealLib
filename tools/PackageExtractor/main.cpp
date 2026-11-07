@@ -4,6 +4,7 @@
 //   sounds (SoundNodeWave): the stored file as-is (Mirror's Edge PC: Ogg Vorbis)
 //   static meshes: Wavefront OBJ (LOD 0); skeletal meshes: ActorX PSK (LOD 0, with skeleton and weights)
 //   animations: one ActorX PSA per AnimSet (all its sequences)
+//   materials: <Name>.mat.json (parent, parameters, textures; compiled shaders are not decoded)
 //
 // Output: <output>/<Package>/<Outer path>/<Name>.<ext>. Mips streamed from other packages are found through the
 // search paths (default: the package's directory, recursively).
@@ -12,11 +13,13 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
 #include <CLI/CLI.hpp>
+#include <nlohmann/json.hpp>
 #include <fmt/format.h>
 
 #include <UnrealLib/UnrealLib.hpp>
@@ -36,6 +39,7 @@ namespace
         bool sounds = true;
         bool meshes = true;
         bool animations = true;
+        bool materials = true;
         std::string filter;
         bool quiet = false;
     };
@@ -158,6 +162,44 @@ namespace
         ++totals.written;
     }
 
+    void extract_material(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root,
+                          const PropertySchema* schema, Totals& totals)
+    {
+        const MaterialInfo info = read_material(linker, ref, schema);
+        const auto path_of = [&](ObjectIndex i) -> nlohmann::ordered_json {
+            if (i.is_null() || !package.is_valid(i)) return nullptr;
+            return package.class_name(i) + "'" + (i.is_export() ? package.name() + "." : "") + package.object_path(i) + "'";
+        };
+        nlohmann::ordered_json j;
+        j["name"] = info.name;
+        j["class"] = info.class_name;
+        j["parent"] = path_of(info.parent);
+        j["blend_mode"] = info.blend_mode;
+        j["two_sided"] = info.two_sided;
+        nlohmann::ordered_json params = nlohmann::ordered_json::array();
+        for (const auto& p : info.parameters)
+        {
+            nlohmann::ordered_json e;
+            e["name"] = p.name;
+            switch (p.kind)
+            {
+                case MaterialParameter::Kind::Scalar: e["scalar"] = p.scalar; break;
+                case MaterialParameter::Kind::Vector: e["vector"] = p.vector; break;
+                case MaterialParameter::Kind::Texture: e["texture"] = path_of(p.texture); break;
+            }
+            params.push_back(std::move(e));
+        }
+        j["parameters"] = std::move(params);
+        nlohmann::ordered_json textures = nlohmann::ordered_json::array();
+        for (const ObjectIndex t : info.textures) textures.push_back(path_of(t));
+        j["textures"] = std::move(textures);
+        j["expressions"] = info.expressions.size();
+        j["native_shader_bytes"] = info.native_bytes;
+        const std::string text = j.dump(2) + "\n";
+        write_file(output_path(root, package, ref.index, "mat.json"), std::as_bytes(std::span(text)));
+        ++totals.written;
+    }
+
     void extract_sound(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root, Totals& totals)
     {
         const SoundWave sound = read_sound_wave(linker, ref);
@@ -174,7 +216,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    CLI::App app{"Extract assets (textures, sounds, meshes, animations) from an Unreal Engine 3 package (UnrealLib)",
+    CLI::App app{"Extract assets (textures, sounds, meshes, animations, materials) from an Unreal Engine 3 package (UnrealLib)",
                  "UnrealPackageExtractor"};
     argv = app.ensure_utf8(argv);
 
@@ -182,7 +224,7 @@ int main(int argc, char** argv)
     std::string output;
     std::string profile;
     std::vector<std::string> search_paths;
-    std::vector<std::string> types{"textures", "sounds", "meshes", "animations"};
+    std::vector<std::string> types{"textures", "sounds", "meshes", "animations", "materials"};
     Settings settings;
 
     app.add_option("package", path, "Package file")->required()->check(CLI::ExistingFile);
@@ -191,8 +233,8 @@ int main(int argc, char** argv)
     app.add_option("-s,--search-path", search_paths,
                    "Directories with the game's packages (default: the package's directory and the nearest parent with Core.u)")
         ->check(CLI::ExistingDirectory);
-    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds, meshes, animations")
-        ->check(CLI::IsMember({"textures", "sounds", "meshes", "animations"}))
+    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds, meshes, animations, materials")
+        ->check(CLI::IsMember({"textures", "sounds", "meshes", "animations", "materials"}))
         ->delimiter(',');
     app.add_option("--texture-format", settings.texture_format, "png, tga or dds (dds keeps every mip losslessly)")
         ->check(CLI::IsMember({"png", "tga", "dds"}));
@@ -204,6 +246,7 @@ int main(int argc, char** argv)
     settings.sounds = std::find(types.begin(), types.end(), "sounds") != types.end();
     settings.meshes = std::find(types.begin(), types.end(), "meshes") != types.end();
     settings.animations = std::find(types.begin(), types.end(), "animations") != types.end();
+    settings.materials = std::find(types.begin(), types.end(), "materials") != types.end();
 
     try
     {
@@ -232,6 +275,16 @@ int main(int argc, char** argv)
         }
         for (const auto& dir : search_paths) linker.add_search_path(Tools::utf8_path(dir));
         const Package& package = linker.load(file);
+        // Type information for material parameter arrays: the script packages found through the search paths.
+        std::unique_ptr<ReflectionSchema> schema;
+        if (settings.materials)
+        {
+            schema = std::make_unique<ReflectionSchema>(linker);
+            for (const char* script : {"Core", "Engine", "GameFramework", "TdGame"})
+            {
+                if (const Package* p = linker.find_package(script)) schema->add_package(*p);
+            }
+        }
         const fs::path root = Tools::utf8_path(output);
 
         Totals totals;
@@ -251,7 +304,9 @@ int main(int argc, char** argv)
             const bool skeletal = settings.meshes && cls == "SkeletalMesh";
             const bool anim_set =
                 settings.animations && (cls == "AnimSet" || linker.is_a(ref, "Engine.AnimSet").value_or(false));
-            if (!texture && !sound && !mesh && !skeletal && !anim_set)
+            const bool material = settings.materials && (cls == "Material" || cls == "MaterialInstanceConstant" ||
+                                                         cls == "MaterialInstanceTimeVarying");
+            if (!texture && !sound && !mesh && !skeletal && !anim_set && !material)
             {
                 continue;
             }
@@ -267,6 +322,7 @@ int main(int argc, char** argv)
                 else if (mesh) extract_static_mesh(linker, package, ref, root, totals);
                 else if (skeletal) extract_skeletal_mesh(linker, package, ref, root, totals);
                 else if (anim_set) extract_anim_set(linker, package, ref, root, totals);
+                else if (material) extract_material(linker, package, ref, root, schema.get(), totals);
                 else extract_sound(linker, package, ref, root, totals);
                 if (!settings.quiet && totals.written != before)
                 {

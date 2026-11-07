@@ -19,12 +19,14 @@
 
 #include <UnrealLib/Assets/Animation.hpp>
 #include <UnrealLib/Assets/Image.hpp>
+#include <UnrealLib/Assets/Material.hpp>
 #include <UnrealLib/Assets/SkeletalMesh.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
 #include <UnrealLib/Assets/StaticMesh.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Linker/Linker.hpp>
+#include <UnrealLib/Linker/ReflectionSchema.hpp>
 #include <UnrealLib/Objects/ObjectFlags.hpp>
 
 #include "Support/FixtureSupport.hpp"
@@ -344,3 +346,58 @@ TEST(MirrorsEdgeAssetTests, FullCorpusAssets)
 }
 
 
+
+TEST(MirrorsEdgeAssetTests, FullCorpusMaterials)
+{
+    // Every material's metadata, with a ReflectionSchema so parameter arrays decode. Batches share one Linker and
+    // schema (see MirrorsEdgePropertyTests.FullCorpusPropertiesWithReflectionSchema).
+    if (!fixtures_available() || env("UNREALLIB_FIXTURE_SWEEP") != "1")
+    {
+        GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_FIXTURE_SWEEP=1";
+    }
+    constexpr std::size_t batch = 32;
+    const auto files = packages(true);
+    std::map<std::string, std::size_t> classes;
+    std::size_t parameters = 0, textures = 0, expressions = 0, failures = 0, undecoded = 0, unnamed = 0;
+    for (std::size_t first = 0; first < files.size(); first += batch)
+    {
+        Linker linker;
+        linker.add_search_path(fixture_dir());
+        ReflectionSchema schema(linker);
+        for (const Package* script : load_script_packages(linker)) schema.add_package(*script);
+        for (std::size_t f = first; f < std::min(files.size(), first + batch); ++f)
+        {
+            const Package& package = linker.load(files[f]);
+            for (std::size_t i = 0; i < package.exports().size(); ++i)
+            {
+                const ObjectRef ref{&package, ObjectIndex::from_export(i)};
+                const std::string cls = package.class_name(ref.index);
+                if ((cls != "Material" && cls != "MaterialInstanceConstant" && cls != "MaterialInstanceTimeVarying") ||
+                    (package.exports()[i].object_flags & ObjectFlag::ClassDefaultObject) != 0)
+                {
+                    continue;
+                }
+                try
+                {
+                    const MaterialInfo info = read_material(linker, ref, &schema);
+                    ++classes[cls];
+                    parameters += info.parameters.size();
+                    textures += info.textures.size();
+                    expressions += info.expressions.size();
+                    undecoded += info.undecoded_parameters;
+                    for (const auto& p : info.parameters) unnamed += p.name.empty() ? 1 : 0;
+                }
+                catch (const Error& e)
+                {
+                    if (failures++ < 10) ADD_FAILURE() << linker.qualified_path(ref) << ": " << e.what();
+                }
+            }
+        }
+    }
+    for (const auto& [c, n] : classes) std::cout << "    " << n << "x " << c << '\n';
+    std::cout << "  parameters: " << parameters << ", textures referenced: " << textures
+              << ", expressions: " << expressions << ", undecoded parameter arrays: " << undecoded << '\n';
+    EXPECT_EQ(failures, 0u);
+    EXPECT_EQ(undecoded, 0u);
+    EXPECT_EQ(unnamed, 0u);
+}

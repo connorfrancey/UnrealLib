@@ -55,6 +55,7 @@
 #include <UnrealLib/Assets/AssetObject.hpp>
 #include <UnrealLib/Assets/BulkData.hpp>
 #include <UnrealLib/Assets/Image.hpp>
+#include <UnrealLib/Assets/Material.hpp>
 #include <UnrealLib/Assets/MeshTypes.hpp>
 #include <UnrealLib/Assets/SkeletalMesh.hpp>
 #include <UnrealLib/Assets/Sound.hpp>

@@ -28,7 +28,10 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
 * Decompiler for whole classes (declaration, structs, enums, consts, variables, replication, `defaultproperties`), functions and states: expressions with operator precedence, if/else, loops (`for`, `while`,
   `do`/`until`, `foreach`), `switch`, break/continue; native function table built from the game itself.
 * Differential tests against upstream C# UELib (opt-in, needs the .NET SDK).
-* Tools: `UnrealPackageInspector` (text or normalized JSON), `UnrealPackageValidator` and `UnrealScriptDecompiler`.
+* Assets: textures (DXT1/3/5, BC5, ARGB, ... → PNG/TGA/DDS, including mips streamed from other packages), sounds (Ogg
+  Vorbis), static meshes (OBJ), skeletal meshes (PSK), animations (PSA), material metadata (JSON).
+* Tools: `UnrealPackageInspector` (text or normalized JSON), `UnrealPackageValidator`, `UnrealScriptDecompiler` and
+  `UnrealPackageExtractor`.
 
 ## Quick start
 
@@ -85,6 +88,7 @@ Tests, tools and examples are off by default for consumers; only fmt, spdlog and
 * [Serialization](docs/serialization.md)
 * [Package format](docs/package_format.md)
 * [Decompiler](docs/decompiler.md)
+* [Assets](docs/assets.md)
 * [Development guide (build options, testing, milestones, limitations)](docs/development.md)
 * API reference: configure with `-DUNREALLIB_BUILD_DOCS=ON` and build `unreallib_docs` (Doxygen).
 

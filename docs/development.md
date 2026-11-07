@@ -62,7 +62,7 @@ Presets: `msvc-x64-debug`, `msvc-x64-release`, `msvc-x86-debug`, `msvc-x86-relea
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `UNREALLIB_BUILD_TESTS` | top-level | GoogleTest suite |
-| `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator`, `UnrealScriptDecompiler` |
+| `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator`, `UnrealScriptDecompiler`, `UnrealPackageExtractor` |
 | `UNREALLIB_BUILD_EXAMPLES` | top-level | examples |
 | `UNREALLIB_BUILD_BENCHMARKS` | OFF | (no benchmarks yet) |
 | `UNREALLIB_BUILD_DOCS` | OFF | `unreallib_docs` Doxygen target |
@@ -206,7 +206,7 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 | M4 | Property tags, typed property values, struct/array/map, unknown-property preservation | **done** (verified on 2426 packages: 9,656,419 properties, byte-exact round trip; with `ReflectionSchema` every one of 1,639,154 arrays decodes). `MapProperty` values are kept as raw bytes |
 | M5 | Reflection (`UField`/`UStruct`/`UClass`/`UFunction`/`UState`/`UEnum`/`UConst`), bytecode decoder + IR | **done** (verified on 2426 packages: every reflection export consumes its data exactly; 13,770 scripts / 477,343 tokens end exactly at ScriptSize) |
 | M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
-| M7 | Assets (textures first, then sound, meshes, materials, animation) + PackageExtractor | |
+| M7 | Assets (textures, sound, meshes, materials, animation) + PackageExtractor | **done** (every texture, sound, static/skeletal mesh, animation and material of the game; see [assets.md](assets.md)) |
 | M8 | T3D, package writer, LZO compression | |
 | M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | |
 
@@ -218,9 +218,9 @@ Verified: all 177 tests pass under `clang-cl-x64-asan`, including mutation tests
 
 ## Known limitations
 
-* Objects are parsed up to and including their tagged script properties, and reflection objects (classes, structs,
-  functions, states, enums, consts, properties, text buffers) completely, bytecode included. Class-specific native
-  data after the properties (textures, meshes, sounds, levels, ...) is not deserialized yet: it is available as the
+* Objects are parsed up to and including their tagged script properties; reflection objects completely (bytecode
+  included); textures, sounds, static/skeletal meshes and animations completely (see [assets.md](assets.md)). Native
+  data of other classes (levels, BSP, terrain, fonts, particle systems, material shader caches) is available as the
   export's remaining raw bytes.
 * Without a `ReflectionSchema`, only the built-in Core math structs are known: arrays and script-declared structs
   are kept as raw bytes (losslessly). Pass a `ReflectionSchema` over the game's script packages to decode them all.

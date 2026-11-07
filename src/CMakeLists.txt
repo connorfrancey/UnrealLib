@@ -112,6 +112,7 @@ unreallib_add_module(Assets
             Assets/AssetObject.cpp
             Assets/BulkData.cpp
             Assets/Image.cpp
+            Assets/Material.cpp
             Assets/MeshReading.hpp
             Assets/SkeletalMesh.cpp
             Assets/Sound.cpp
