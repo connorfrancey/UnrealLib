@@ -3,7 +3,7 @@
 A native C++20 library for reading Unreal Engine 3 packages, ported from the behaviour of
 [UELib](https://github.com/EliotVU/Unreal-Library) (C#). The first target is **Mirror's Edge (2008), PC**.
 
-> **Status: milestones M0–M8 done; M9 (stabilization) next.** Package summaries, compression,
+> **Status: milestones M0–M9 done.** Package summaries, compression,
 > name/import/export/depends tables, game profiles, structural validation, cross-package import resolution, UObject
 > headers, tagged script properties, reflection objects, UnrealScript bytecode decoding and class decompilation, asset
 > extraction, package rewriting and T3D level export/import are implemented and verified against all 2,426 packages of the
@@ -102,10 +102,13 @@ See [docs/development.md](docs/development.md#installing-and-find_packageunreall
 
 * [Architecture & upstream inventory](docs/architecture.md)
 * [Supported versions & Mirror's Edge verification](docs/supported_versions.md)
+* [Compatibility report (vs. upstream UELib)](docs/compatibility.md)
+* [API guide and review](docs/api.md)
 * [Serialization](docs/serialization.md)
 * [Package format](docs/package_format.md)
 * [Decompiler](docs/decompiler.md)
 * [Assets](docs/assets.md)
+* [T3D](docs/t3d.md)
 * [Development guide (build options, testing, milestones, limitations)](docs/development.md)
 * API reference: configure with `-DUNREALLIB_BUILD_DOCS=ON` and build `unreallib_docs` (Doxygen).
 

@@ -318,12 +318,12 @@ Reference numbers (MSVC 19.51 x64 Release, 24-thread 4.4 GHz desktop):
 | M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
 | M7 | Assets (textures, sound, meshes, materials, animation) + PackageExtractor | **done** (every texture, sound, static/skeletal mesh, animation and material of the game; see [assets.md](assets.md)) |
 | M8 | T3D, package writer, LZO compression | **done** — writer: all 873 uncompressed packages rewritten byte-identically, all 1,553 compressed ones reload with identical tables and export bytes, LZO encoder; T3D: parser/serializer/validation, level export verified on all 680 levels (152,965 actors, 7,958 brushes / 48,103 polygons, 2,880,354 properties, 0 raw values, text round trip exact; see [t3d.md](t3d.md)); T3D import (`import_document`, `parse_property_value`, `UnrealT3DImporter`): every level's unmodified export imports back with 0 changes (338,507 objects), edits round-trip through write → reload → export; brush geometry: `read_polys`/`write_polys` (byte-exact) and `read_model` on all 9,392 Polys/Model exports |
-| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **in progress** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release); fuzzing: 7 targets replayed on every test run + libFuzzer preset (one cyclic-outer hang found and fixed); benchmarks (synthetic + Mirror's Edge fixture); differential tests extended to property tags and bytecode (58,845 objects, 439,779 tokens agree with upstream) |
+| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **done** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release); fuzzing: 7 targets replayed on every test run + libFuzzer preset (one cyclic-outer hang found and fixed); benchmarks (synthetic + Mirror's Edge fixture); differential tests extended to property tags and bytecode (58,845 objects, 439,779 tokens agree with upstream); API review ([api.md](api.md), header self-containment check) and [compatibility report](compatibility.md) |
 
 ### Next concrete tasks
 
 1. Decode `MapProperty` values (kept raw today) once a fixture shows their layout.
-2. API review and compatibility report (M9).
+2. Further games: profiles and verification beyond Mirror's Edge (see [compatibility.md](compatibility.md)).
 
 ## Known limitations
 

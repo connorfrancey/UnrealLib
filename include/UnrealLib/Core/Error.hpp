@@ -2,6 +2,14 @@
 
 /// @file
 /// @brief Exception hierarchy used throughout UnrealLib.
+///
+/// Error contract of the whole library: a function that reads, decodes, parses, resolves or writes data reports
+/// every failure — malformed or truncated input, exceeded SerializationLimits, unsupported versions/formats, invalid
+/// arguments, missing objects — by throwing UnrealLib::Error (or a subclass below). No other exception type escapes
+/// UnrealLib for any input, apart from std::bad_alloc when memory genuinely runs out within the configured limits;
+/// this is enforced by the fuzz targets in tests/Fuzz. `@throws` lines in the documentation name the specific
+/// subclasses and conditions where they matter; functions without one follow this contract. Non-fatal findings are
+/// reported as Diagnostics instead. Functions marked noexcept never throw.
 
 #include <cstdint>
 #include <optional>

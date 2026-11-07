@@ -158,3 +158,23 @@ if (UNREALLIB_INSTALL)
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/Install/RunConsumerTest.cmake")
     set_tests_properties(Install.Consumer PROPERTIES LABELS "install" TIMEOUT 600)
 endif ()
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Public header self-containment: every header under include/UnrealLib compiles on its own (and twice, so include
+# guards / #pragma once work). The glob is deliberate here — the check must cover headers added later — and is not
+# used for library sources.
+# ----------------------------------------------------------------------------------------------------------------------
+file(GLOB_RECURSE _public_headers CONFIGURE_DEPENDS RELATIVE "${PROJECT_SOURCE_DIR}/include"
+     "${PROJECT_SOURCE_DIR}/include/UnrealLib/*.hpp")
+set(_header_check_sources "")
+foreach (header IN LISTS _public_headers)
+    string(MAKE_C_IDENTIFIER "${header}" _id)
+    set(_source "${CMAKE_CURRENT_BINARY_DIR}/header-check/${_id}.cpp")
+    file(CONFIGURE OUTPUT "${_source}"
+         CONTENT "// Generated: ${header} must compile on its own.\n#include <${header}>\n#include <${header}>\n")
+    list(APPEND _header_check_sources "${_source}")
+endforeach ()
+add_library(unreallib_header_check OBJECT ${_header_check_sources})
+target_link_libraries(unreallib_header_check PRIVATE UnrealLib::UnrealLib)
+unreallib_set_compiler_options(unreallib_header_check)
+set_target_properties(unreallib_header_check PROPERTIES FOLDER "UnrealLib/Tests")

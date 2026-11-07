@@ -19,7 +19,7 @@ namespace UnrealLib::Assets
         std::vector<std::uint8_t> rgba;   ///< width * height * 4 bytes.
 
         /// @brief Creates a zero-filled image.
-        static Image create(std::uint32_t width, std::uint32_t height);
+        [[nodiscard]] static Image create(std::uint32_t width, std::uint32_t height);
 
         /// @brief Pointer to pixel (x, y) (4 bytes: R, G, B, A). Precondition: in range.
         [[nodiscard]] std::uint8_t* at(std::uint32_t x, std::uint32_t y) noexcept

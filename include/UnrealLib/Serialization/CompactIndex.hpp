@@ -22,7 +22,8 @@ namespace UnrealLib
     ///              silently overflow, UnrealLib throws SerializationError).
     /// @param out   Receives the encoded bytes.
     /// @return Number of bytes written to @p out (1–5).
-    std::size_t encode_compact_index(std::int32_t value, std::array<std::uint8_t, compact_index_max_size>& out);
+    [[nodiscard]] std::size_t encode_compact_index(std::int32_t value,
+                                                   std::array<std::uint8_t, compact_index_max_size>& out);
 
     /// @brief Number of bytes encode_compact_index() produces for @p value.
     [[nodiscard]] std::size_t compact_index_size(std::int32_t value);

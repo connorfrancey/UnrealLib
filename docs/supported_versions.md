@@ -54,15 +54,17 @@ cmake --preset msvc-x64-release -DUNREALLIB_BUILD_DIFFERENTIAL=ON -DUNREALLIB_DI
 ctest --preset msvc-x64-release -R Differential
 ```
 
-### Mirror's Edge specifics known from upstream (not yet used)
+### Mirror's Edge specifics taken from upstream
 
-* Bytecode: upstream maps token `0x4F` to `UnresolvedToken` for Mirror's Edge (`DefaultEngineBranch.cs`).
-* Bytecode: Mirror's Edge (536) is the first build where the struct-member context token serializes a 16-bit property
-  type instead of 8-bit (`ContextTokens.cs`: "first attested with Mirrors Edge (536)").
+* Bytecode: token `0x4F` is unresolved (`TokenKind::Unresolved`) for Mirror's Edge, as in upstream's
+  `DefaultEngineBranch.cs`.
+* Bytecode: from version 536 the struct-member context token serializes a 16-bit property type (upstream
+  `ContextTokens.cs`: "first attested with Mirrors Edge (536)").
 
-These belong to milestone M5 (bytecode) and will be added to the profile together with tests.
+Both are used by the bytecode decoder; the differential tests confirm all 439,779 tokens of the script packages
+match upstream's.
 
-### Not yet verified
+### Beyond the package tables
 
-Script properties, UField/UStruct/UClass data, bytecode, assets. See
-[development.md](development.md) for the milestone plan.
+Properties, reflection data, bytecode, the decompiler, assets, T3D and package writing are verified as well; see the
+[compatibility report](compatibility.md) for the per-feature results.
