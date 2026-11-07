@@ -59,10 +59,12 @@ add_executable(UnrealLibTests
         Integration/MirrorsEdgeAssetTests.cpp
         Integration/MirrorsEdgeWriterTests.cpp
         Integration/MirrorsEdgeT3DTests.cpp
+        Integration/MirrorsEdgeReferenceTests.cpp
         Regression/ApprovalRegressionTests.cpp)
 
 target_compile_definitions(UnrealLibTests PRIVATE
-        UNREALLIB_FUZZ_REGRESSION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Fuzz/Regressions")
+        UNREALLIB_FUZZ_REGRESSION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Fuzz/Regressions"
+        UNREALLIB_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Reference")
 target_link_libraries(UnrealLibTests PRIVATE
         unreallib_test_support
         UnrealLib::UnrealLib

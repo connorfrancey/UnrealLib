@@ -149,6 +149,7 @@ GoogleTest is the test framework (with GoogleMock available); tests are discover
 | `tests/Fuzz` | fuzz targets, seeds and regression inputs; `FuzzReplayTests` (every run) and libFuzzer executables (see *Fuzzing* below); `MutationTests` for the loader |
 | `tests/Integration` | real Mirror's Edge fixtures (skipped unless `UNREALLIB_MIRRORSEDGE_DIR` is set) |
 | `tests/Differential` | UnrealLib vs. upstream C# UELib (opt-in, needs the .NET SDK) |
+| `tests/Reference` | normalized corpus metadata (`mirrorsedge-pc.tsv`): regression baseline for every package's summary and tables (`FullCorpusMatchesReference`, sweep) |
 | `tests/Install` | `Install.Consumer`: install + `find_package(UnrealLib)` from a separate project |
 
 Fixture tests:
