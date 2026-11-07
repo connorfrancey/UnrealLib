@@ -2,6 +2,7 @@
 //
 //   textures (Texture2D and subclasses): PNG (default), TGA, or DDS with every available mip (lossless)
 //   sounds (SoundNodeWave): the stored file as-is (Mirror's Edge PC: Ogg Vorbis)
+//   static meshes: Wavefront OBJ (LOD 0)
 //
 // Output: <output>/<Package>/<Outer path>/<Name>.<ext>. Mips streamed from other packages are found through the
 // search paths (default: the package's directory, recursively).
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -31,6 +33,7 @@ namespace
         std::string texture_format = "png";
         bool textures = true;
         bool sounds = true;
+        bool meshes = true;
         std::string filter;
         bool quiet = false;
     };
@@ -109,6 +112,20 @@ namespace
         ++totals.written;
     }
 
+    void extract_static_mesh(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root,
+                             Totals& totals)
+    {
+        const StaticMesh mesh = read_static_mesh(linker, ref);
+        if (mesh.lods.empty())
+        {
+            ++totals.skipped;
+            return;
+        }
+        const std::string obj = to_obj(package, mesh);
+        write_file(output_path(root, package, ref.index, "obj"), std::as_bytes(std::span(obj)));
+        ++totals.written;
+    }
+
     void extract_sound(Linker& linker, const Package& package, ObjectRef ref, const fs::path& root, Totals& totals)
     {
         const SoundWave sound = read_sound_wave(linker, ref);
@@ -125,7 +142,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    CLI::App app{"Extract assets (textures, sounds) from an Unreal Engine 3 package (UnrealLib)",
+    CLI::App app{"Extract assets (textures, sounds, static meshes) from an Unreal Engine 3 package (UnrealLib)",
                  "UnrealPackageExtractor"};
     argv = app.ensure_utf8(argv);
 
@@ -133,7 +150,7 @@ int main(int argc, char** argv)
     std::string output;
     std::string profile;
     std::vector<std::string> search_paths;
-    std::vector<std::string> types{"textures", "sounds"};
+    std::vector<std::string> types{"textures", "sounds", "meshes"};
     Settings settings;
 
     app.add_option("package", path, "Package file")->required()->check(CLI::ExistingFile);
@@ -142,8 +159,8 @@ int main(int argc, char** argv)
     app.add_option("-s,--search-path", search_paths,
                    "Directories with the packages that hold streamed texture mips (default: the package's directory)")
         ->check(CLI::ExistingDirectory);
-    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds")
-        ->check(CLI::IsMember({"textures", "sounds"}))
+    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds, meshes")
+        ->check(CLI::IsMember({"textures", "sounds", "meshes"}))
         ->delimiter(',');
     app.add_option("--texture-format", settings.texture_format, "png, tga or dds (dds keeps every mip losslessly)")
         ->check(CLI::IsMember({"png", "tga", "dds"}));
@@ -153,6 +170,7 @@ int main(int argc, char** argv)
 
     settings.textures = std::find(types.begin(), types.end(), "textures") != types.end();
     settings.sounds = std::find(types.begin(), types.end(), "sounds") != types.end();
+    settings.meshes = std::find(types.begin(), types.end(), "meshes") != types.end();
 
     try
     {
@@ -181,7 +199,8 @@ int main(int argc, char** argv)
             const std::string cls = package.class_name(ref.index);
             const bool texture = settings.textures && is_texture2d_class(cls);
             const bool sound = settings.sounds && cls == "SoundNodeWave";
-            if (!texture && !sound)
+            const bool mesh = settings.meshes && cls == "StaticMesh";
+            if (!texture && !sound && !mesh)
             {
                 continue;
             }
@@ -194,6 +213,7 @@ int main(int argc, char** argv)
             {
                 const std::size_t before = totals.written;
                 if (texture) extract_texture(linker, package, ref, root, settings, totals);
+                else if (mesh) extract_static_mesh(linker, package, ref, root, totals);
                 else extract_sound(linker, package, ref, root, totals);
                 if (!settings.quiet && totals.written != before)
                 {

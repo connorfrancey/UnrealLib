@@ -8,6 +8,7 @@
 
 #include <UnrealLib/Assets/BulkData.hpp>
 #include <UnrealLib/Assets/Image.hpp>
+#include <UnrealLib/Assets/MeshTypes.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
 #include <UnrealLib/Core/Error.hpp>
@@ -230,4 +231,16 @@ TEST(AudioTests, DetectsContainers)
     EXPECT_EQ(detect_audio_container(wav), AudioContainer::Xma);
     EXPECT_EQ(detect_audio_container(bytes({1, 2})), AudioContainer::Unknown);
     EXPECT_EQ(file_extension(AudioContainer::Ogg), "ogg");
+}
+
+TEST(MeshTypesTests, UnpacksPackedNormals)
+{
+    // Each byte maps b / 127.5 - 1: 0 -> -1, 255 -> 1, 0x80 -> ~0.0039.
+    const Vec3 up = unpack_normal(0x00FF8080u);
+    EXPECT_NEAR(up.x, 0.0039f, 1e-3f);
+    EXPECT_NEAR(up.y, 0.0039f, 1e-3f);
+    EXPECT_NEAR(up.z, 1.0f, 1e-6f);
+    const Vec3 down = unpack_normal(0x00000000u);
+    EXPECT_FLOAT_EQ(down.x, -1.0f);
+    EXPECT_FLOAT_EQ(down.z, -1.0f);
 }

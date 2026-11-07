@@ -38,6 +38,16 @@ namespace UnrealLib
     /// @brief Returns "PC", "Xbox360", "PS3" or "Unknown".
     [[nodiscard]] std::string_view to_string(Platform platform) noexcept;
 
+    /// @brief Licensee changes to asset (native object) serialization.
+    struct AssetRules
+    {
+        /// StaticMesh ends with one extra float after ThumbnailDistance (Mirror's Edge; meaning unknown).
+        bool static_mesh_trailing_float = false;
+        /// Number of UV sets in skeletal mesh GPU vertices when the version would imply 1 (Mirror's Edge: 3,
+        /// licensee >= 13; UE Viewer). 0 = engine default.
+        std::uint8_t skeletal_uv_sets = 0;
+    };
+
     /// @brief Describes one game build and the facts used to recognise its packages.
     ///
     /// Version numbers alone do not identify a game; detection also weighs licensee version, engine build, cooker
@@ -59,6 +69,7 @@ namespace UnrealLib
         /// Bytecode opcode reassignments relative to the version's default UE3 token map, as (opcode, token name)
         /// pairs; token names are those of `UnrealLib::to_string(TokenKind)` (e.g. {0x4F, "Unresolved"}).
         std::vector<std::pair<std::uint8_t, std::string>> bytecode_overrides;
+        AssetRules assets;     ///< Asset serialization differences.
         bool verified = false; ///< Whether the profile has been verified against real game packages.
         std::string notes;     ///< Provenance of the values.
     };

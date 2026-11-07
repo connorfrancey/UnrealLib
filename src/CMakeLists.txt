@@ -111,7 +111,9 @@ unreallib_add_module(Assets
             Assets/AssetObject.cpp
             Assets/BulkData.cpp
             Assets/Image.cpp
+            Assets/MeshReading.hpp
             Assets/Sound.cpp
+            Assets/StaticMesh.cpp
             Assets/Texture.cpp
         PUBLIC_DEPS
             UnrealLib::Linker

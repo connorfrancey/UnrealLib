@@ -9,13 +9,17 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <span>
 #include <string>
 #include <vector>
 
+#include <UnrealLib/Assets/Image.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
+#include <UnrealLib/Assets/StaticMesh.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Linker/Linker.hpp>
@@ -47,6 +51,10 @@ namespace
         std::size_t total_failures = 0;
         std::size_t offset_mismatches = 0;
         std::size_t separate_mips_decoded = 0;
+        std::size_t mesh_vertices = 0;
+        std::size_t mesh_triangles = 0;
+        std::size_t meshes_dumped = 0;
+        std::map<std::string, std::size_t> uv_sets;
 
         void fail(const std::string& cls, const std::string& path, const std::string& message)
         {
@@ -115,6 +123,39 @@ namespace
                         tally.fail(cls + " decode", linker.qualified_path(ref), e.what());
                     }
                 }
+                else if (cls == "StaticMesh")
+                {
+                    const StaticMesh mesh = read_static_mesh(linker, ref);
+                    ++tally.read[cls];
+                    for (const auto& lod : mesh.lods)
+                    {
+                        tally.mesh_vertices += lod.positions.size();
+                        // Independent check of the position stream: every LOD 0 vertex lies in the stored bounds
+                        // (computed from LOD 0; 72 lower LODs exceed them by up to 2x in the real data).
+                        const auto& b = mesh.bounds;
+                        const float slack = 0.01f * std::max({b.box_extent.x, b.box_extent.y, b.box_extent.z, 1.0f});
+                        for (const Vec3& p : lod.positions)
+                        {
+                            if (&lod != mesh.lods.data()) break;
+                            if (std::abs(p.x - b.origin.x) > b.box_extent.x + slack ||
+                                std::abs(p.y - b.origin.y) > b.box_extent.y + slack ||
+                                std::abs(p.z - b.origin.z) > b.box_extent.z + slack)
+                            {
+                                tally.fail(cls, linker.qualified_path(ref), "vertex outside the bounds");
+                                break;
+                            }
+                        }
+                        tally.mesh_triangles += lod.indices.size() / 3;
+                        ++tally.uv_sets[std::to_string(lod.num_uv_sets) + (lod.full_precision_uvs ? " float" : " half")];
+                    }
+                    if (!dump.empty() && tally.meshes_dumped < 20 && tally.read[cls] % 1000 == 0 && !mesh.lods.empty())
+                    {
+                        ++tally.meshes_dumped;
+                        const std::string obj = to_obj(package, mesh);
+                        write_file(fs::path(dump) / "meshes" / (package.name() + "." + mesh.name + ".obj"),
+                                   std::as_bytes(std::span(obj)));
+                    }
+                }
                 else if (cls == "TextureCube")
                 {
                     (void)read_texture_cube(linker, ref);
@@ -166,6 +207,8 @@ namespace
         print_map("mip bulk flags", tally.mip_flags);
         print_map("sound bulk flags", tally.sound_flags);
         print_map("audio containers", tally.containers);
+        print_map("static mesh UV sets", tally.uv_sets);
+        std::cout << "  static mesh vertices: " << tally.mesh_vertices << ", triangles: " << tally.mesh_triangles << '\n';
         std::cout << "  textures decoded: " << tally.textures_decoded
                   << ", without stored mips: " << tally.textures_without_payload
                   << ", decode failures: " << tally.texture_decode_failures
