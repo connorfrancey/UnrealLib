@@ -202,10 +202,6 @@ namespace UnrealLib::Testing
         }
 
         // Compressed chunk: header + blocks, placed directly after the summary.
-        if (spec.compression != CompressionMethod::Zlib)
-        {
-            throw std::logic_error("synthetic package: only zlib compression can be produced");
-        }
         BinaryWriter chunk(summary.context());
         std::vector<std::vector<std::byte>> blocks;
         std::vector<std::int32_t> block_sizes;
@@ -213,7 +209,7 @@ namespace UnrealLib::Testing
         {
             const std::size_t length =
                 std::min(static_cast<std::size_t>(spec.block_size), body_bytes.size() - offset);
-            blocks.push_back(compress_zlib(std::span<const std::byte>(body_bytes).subspan(offset, length)));
+            blocks.push_back(compress(spec.compression, std::span<const std::byte>(body_bytes).subspan(offset, length)));
             block_sizes.push_back(static_cast<std::int32_t>(length));
         }
         std::int32_t compressed_total = 0;

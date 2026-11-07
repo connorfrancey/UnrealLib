@@ -139,4 +139,27 @@ namespace UnrealLib
         output.resize(bound);
         return output;
     }
+
+    bool can_compress(CompressionMethod method) noexcept
+    {
+        return method == CompressionMethod::Zlib || method == CompressionMethod::Lzo;
+    }
+
+    std::vector<std::byte> compress(CompressionMethod method, std::span<const std::byte> input)
+    {
+        switch (method)
+        {
+        case CompressionMethod::Zlib:
+            return compress_zlib(input);
+        case CompressionMethod::Lzo:
+        {
+            const std::vector<std::uint8_t> encoded = detail::lzo1x_compress(as_u8(input));
+            std::vector<std::byte> out(encoded.size());
+            std::transform(encoded.begin(), encoded.end(), out.begin(), [](std::uint8_t b) { return std::byte{b}; });
+            return out;
+        }
+        default:
+            throw UnsupportedError(fmt::format("{} compression is not supported", to_string(method)));
+        }
+    }
 }

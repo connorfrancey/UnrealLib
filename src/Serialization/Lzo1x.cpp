@@ -15,7 +15,10 @@
 
 #include "Lzo1x.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstring>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -246,5 +249,181 @@ namespace UnrealLib::detail
     std::size_t lzo1x_decompress(std::span<const std::uint8_t> input, std::span<std::uint8_t> output)
     {
         return Lzo1xDecoder(input, output).run();
+    }
+
+    namespace
+    {
+        class Lzo1xEncoder
+        {
+        public:
+            explicit Lzo1xEncoder(std::span<const std::uint8_t> input) : m_in(input) {}
+
+            std::vector<std::uint8_t> run()
+            {
+                m_out.reserve(m_in.size() + m_in.size() / 16 + 64);
+                m_head.fill(-1);
+                m_prev.assign(m_in.size(), -1);
+                std::size_t literal_start = 0;
+                std::size_t ip = 0;
+                while (ip + 3 <= m_in.size())
+                {
+                    std::size_t best_length = 0, best_distance = 0;
+                    find_match(ip, best_length, best_distance);
+                    if (best_length < 3)
+                    {
+                        insert(ip);
+                        ++ip;
+                        continue;
+                    }
+                    emit_literals(literal_start, ip);
+                    emit_match(best_distance, best_length);
+                    for (std::size_t k = 0; k < best_length; ++k) insert(ip + k);
+                    ip += best_length;
+                    literal_start = ip;
+                }
+                emit_literals(literal_start, m_in.size());
+                // End-of-stream marker: M4 with distance 0 (0x11 0x00 0x00).
+                m_out.push_back(0x11);
+                m_out.push_back(0x00);
+                m_out.push_back(0x00);
+                return std::move(m_out);
+            }
+
+        private:
+            static constexpr std::size_t hash_bits = 15;
+            static constexpr std::size_t max_distance = 0xBFFF;
+            static constexpr std::size_t max_chain = 32;
+            static constexpr std::size_t max_match = 2048;
+
+            std::size_t hash(std::size_t p) const noexcept
+            {
+                const std::uint32_t v = static_cast<std::uint32_t>(m_in[p]) |
+                                        static_cast<std::uint32_t>(m_in[p + 1]) << 8 |
+                                        static_cast<std::uint32_t>(m_in[p + 2]) << 16;
+                return (v * 2654435761u) >> (32 - hash_bits);
+            }
+
+            void insert(std::size_t p)
+            {
+                if (p + 3 > m_in.size()) return;
+                const std::size_t h = hash(p);
+                m_prev[p] = m_head[h];
+                m_head[h] = static_cast<std::int64_t>(p);
+            }
+
+            void find_match(std::size_t ip, std::size_t& best_length, std::size_t& best_distance) const
+            {
+                std::int64_t candidate = m_head[hash(ip)];
+                const std::size_t limit = std::min(max_match, m_in.size() - ip);
+                for (std::size_t chain = 0; candidate >= 0 && chain < max_chain; ++chain)
+                {
+                    const auto c = static_cast<std::size_t>(candidate);
+                    const std::size_t distance = ip - c;
+                    if (distance > max_distance) break;
+                    std::size_t length = 0;
+                    while (length < limit && m_in[c + length] == m_in[ip + length]) ++length;
+                    if (length > best_length)
+                    {
+                        best_length = length;
+                        best_distance = distance;
+                        if (length == limit) break;
+                    }
+                    candidate = m_prev[c];
+                }
+            }
+
+            void extended(std::size_t n)
+            {
+                while (n > 255)
+                {
+                    m_out.push_back(0);
+                    n -= 255;
+                }
+                m_out.push_back(static_cast<std::uint8_t>(n));
+            }
+
+            void emit_literals(std::size_t from, std::size_t to)
+            {
+                const std::size_t count = to - from;
+                if (count == 0) return;
+                if (m_out.empty())
+                {
+                    // First instruction: one byte 17 + count (count <= 238) introduces the run.
+                    if (count <= 238)
+                    {
+                        m_out.push_back(static_cast<std::uint8_t>(17 + count));
+                    }
+                    else
+                    {
+                        m_out.push_back(0);
+                        extended(count - 18);
+                    }
+                }
+                else if (count <= 3)
+                {
+                    // Folded into the low two bits of the previous match's distance byte.
+                    m_out[m_trailing_byte] = static_cast<std::uint8_t>(m_out[m_trailing_byte] | count);
+                }
+                else if (count <= 18)
+                {
+                    m_out.push_back(static_cast<std::uint8_t>(count - 3));
+                }
+                else
+                {
+                    m_out.push_back(0);
+                    extended(count - 18);
+                }
+                m_out.insert(m_out.end(), m_in.begin() + static_cast<std::ptrdiff_t>(from),
+                             m_in.begin() + static_cast<std::ptrdiff_t>(to));
+            }
+
+            void emit_match(std::size_t distance, std::size_t length)
+            {
+                if (distance <= 0x4000)
+                {
+                    const std::size_t d = distance - 1;
+                    if (length - 2 <= 31)
+                    {
+                        m_out.push_back(static_cast<std::uint8_t>(32 | (length - 2)));
+                    }
+                    else
+                    {
+                        m_out.push_back(32);
+                        extended(length - 2 - 31);
+                    }
+                    m_trailing_byte = m_out.size();
+                    m_out.push_back(static_cast<std::uint8_t>((d & 63) << 2));
+                    m_out.push_back(static_cast<std::uint8_t>(d >> 6));
+                }
+                else
+                {
+                    const std::size_t d = distance - 0x4000;
+                    const auto high = static_cast<std::uint8_t>((d >> 11) & 8);
+                    if (length - 2 <= 7)
+                    {
+                        m_out.push_back(static_cast<std::uint8_t>(16 | high | (length - 2)));
+                    }
+                    else
+                    {
+                        m_out.push_back(static_cast<std::uint8_t>(16 | high));
+                        extended(length - 2 - 7);
+                    }
+                    m_trailing_byte = m_out.size();
+                    m_out.push_back(static_cast<std::uint8_t>((d & 63) << 2));
+                    m_out.push_back(static_cast<std::uint8_t>((d >> 6) & 0xFF));
+                }
+            }
+
+            std::span<const std::uint8_t> m_in;
+            std::vector<std::uint8_t> m_out;
+            std::array<std::int64_t, std::size_t{1} << hash_bits> m_head{};
+            std::vector<std::int64_t> m_prev;
+            std::size_t m_trailing_byte = 0;
+        };
+    }
+
+    std::vector<std::uint8_t> lzo1x_compress(std::span<const std::uint8_t> input)
+    {
+        return Lzo1xEncoder(input).run();
     }
 }

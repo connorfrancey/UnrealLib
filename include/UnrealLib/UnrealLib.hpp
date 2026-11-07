@@ -61,3 +61,5 @@
 #include <UnrealLib/Assets/Sound.hpp>
 #include <UnrealLib/Assets/StaticMesh.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
+
+#include <UnrealLib/Writer/PackageWriter.hpp>
