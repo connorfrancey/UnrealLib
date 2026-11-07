@@ -45,6 +45,10 @@ if (UNREALLIB_BUILD_TOOLS)
     add_subdirectory(tools)
 endif ()
 
+if (UNREALLIB_BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
+endif ()
+
 if (UNREALLIB_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif ()

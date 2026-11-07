@@ -64,7 +64,7 @@ Presets: `msvc-x64-debug`, `msvc-x64-release`, `msvc-x86-debug`, `msvc-x86-relea
 | `UNREALLIB_BUILD_TESTS` | top-level | GoogleTest suite |
 | `UNREALLIB_BUILD_TOOLS` | top-level | `UnrealPackageInspector`, `UnrealPackageValidator`, `UnrealScriptDecompiler`, `UnrealPackageExtractor`, `UnrealT3DImporter` |
 | `UNREALLIB_BUILD_EXAMPLES` | top-level | examples |
-| `UNREALLIB_BUILD_BENCHMARKS` | OFF | (no benchmarks yet) |
+| `UNREALLIB_BUILD_BENCHMARKS` | OFF | `UnrealLibBenchmarks` (Google Benchmark; see *Benchmarks* below) |
 | `UNREALLIB_BUILD_FUZZERS` | OFF | libFuzzer executables (clang/clang-cl; use preset `clang-cl-x64-fuzz`) |
 | `UNREALLIB_BUILD_DOCS` | OFF | `unreallib_docs` Doxygen target |
 | `UNREALLIB_USE_CCACHE` | top-level | compile through ccache if found |
@@ -247,6 +247,36 @@ nothing further. Bug found and fixed: a package whose export outers form a cycle
 `Linker::header_input()` loop forever (it only guarded against an object being its own outer); every outer/super chain
 walk in the library is now bounded or cycle-checked (`Regressions/package/cyclic-outer-hang.bin`).
 
+### Benchmarks
+
+```powershell
+uv run uelib.py configure msvc-x64-release -D UNREALLIB_BUILD_BENCHMARKS=ON
+uv run uelib.py build msvc-x64-release -t unreallib_benchmarks
+build/msvc-x64-release/benchmarks/UnrealLibBenchmarks.exe [--benchmark_filter=<regex>]
+```
+
+`benchmarks/Benchmarks.cpp` (Google Benchmark) measures compression (1 MiB of package-like data), loading synthetic
+packages (1,000/10,000 exports; uncompressed, LZO and zlib), reading tagged properties, T3D parse/serialize and the
+property text round trip. With `UNREALLIB_MIRRORSEDGE_DIR` set it adds fixture benchmarks on the largest map package
+(or `UNREALLIB_BENCH_PACKAGE=<path below CookedPC>`): loading, resolving every import with a fresh `Linker` (includes
+lazily loading the packages they live in), reading every export's properties with a `ReflectionSchema`, and T3D level
+export.
+
+Reference numbers (MSVC 19.51 x64 Release, 24-thread 4.4 GHz desktop):
+
+| Benchmark | Result |
+|-----------|--------|
+| zlib compress / decompress (1 MiB, ratio 0.26) | 207 MiB/s / 1.33 GiB/s |
+| LZO1X compress / decompress (1 MiB, ratio 0.26) | 297 MiB/s / 4.0 GiB/s |
+| Load synthetic package, 10,000 exports: uncompressed / LZO / zlib | 2.4 ms / 3.1 ms / 3.2 ms |
+| Read tagged properties, 10,000 objects | 5.5 ms (1.8 M objects/s) |
+| T3D parse / serialize, 1,000 actors | 1.2 ms / 0.6 ms |
+| Property text format + parse, 64 vectors | 49 µs |
+| Factory_Roof.me1 (Mirror's Edge, largest map): load | 182 ms (274 MiB/s) |
+| … resolve all imports (fresh linker, loads Engine etc.) | 293 ms |
+| … read all properties (ReflectionSchema) | 43 ms |
+| … export level as T3D | 28 ms |
+
 ## Coding rules (summary)
 
 * C++20, no compiler extensions, `/W4 /permissive-` clean.
@@ -270,13 +300,13 @@ walk in the library is now bounded or cycle-checked (`Regressions/package/cyclic
 | M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
 | M7 | Assets (textures, sound, meshes, materials, animation) + PackageExtractor | **done** (every texture, sound, static/skeletal mesh, animation and material of the game; see [assets.md](assets.md)) |
 | M8 | T3D, package writer, LZO compression | **done** — writer: all 873 uncompressed packages rewritten byte-identically, all 1,553 compressed ones reload with identical tables and export bytes, LZO encoder; T3D: parser/serializer/validation, level export verified on all 680 levels (152,965 actors, 7,958 brushes / 48,103 polygons, 2,880,354 properties, 0 raw values, text round trip exact; see [t3d.md](t3d.md)); T3D import (`import_document`, `parse_property_value`, `UnrealT3DImporter`): every level's unmodified export imports back with 0 changes (338,507 objects), edits round-trip through write → reload → export; brush geometry: `read_polys`/`write_polys` (byte-exact) and `read_model` on all 9,392 Polys/Model exports |
-| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **in progress** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release); fuzzing: 7 targets replayed on every test run + libFuzzer preset (one cyclic-outer hang found and fixed) |
+| M9 | Differential tests for later milestones, libFuzzer, benchmarks, install/export, API review | **in progress** — install rules + exported `UnrealLib` CMake package (`Install.Consumer` test, Debug and Release); fuzzing: 7 targets replayed on every test run + libFuzzer preset (one cyclic-outer hang found and fixed); benchmarks (synthetic + Mirror's Edge fixture) |
 
 ### Next concrete tasks
 
 1. Differential tests for M4/M5: compare property values and bytecode tokens with upstream UELib, not only the tables.
 2. Decode `MapProperty` values (kept raw today) once a fixture shows their layout.
-3. Benchmarks for LZO decode, table parsing, import resolution and property parsing.
+3. API review and compatibility report (M9).
 
 ## Known limitations
 
