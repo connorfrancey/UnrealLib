@@ -67,7 +67,7 @@ TEST(PackageSummaryTests, MatchesMirrorsEdgeCoreHeaderBytes)
 
 TEST(PackageSummaryTests, RoundTripsAcrossVersionGates)
 {
-    for (const std::uint16_t version : std::initializer_list<std::uint16_t>{249, 269, 277, 322, 334, 343, 415, 482, 516, 536, 584, 623, 766})
+    for (const std::uint16_t version : std::initializer_list<std::uint16_t>{249, 269, 277, 322, 334, 343, 415, 482, 516, 536, 584, 623, 766, 767, 801, 868})
     {
         PackageSummary s = sample_summary(version);
         if (version >= 584)
@@ -83,6 +83,11 @@ TEST(PackageSummaryTests, RoundTripsAcrossVersionGates)
         if (version >= 516)
         {
             s.additional_packages_to_cook = {FString("Foo"), FString("Bar")};
+        }
+        if (version >= 767)
+        {
+            s.texture_allocations = {TextureAllocation{1024, 512, 11, 5, 0x40, {3, 7, 9}},
+                                     TextureAllocation{64, 64, 7, 2, 0, {}}};
         }
         // Zero fields that the version does not serialize, so the comparison is exact.
         if (version < 277) s.cooker_version = 0;
@@ -130,8 +135,8 @@ TEST(PackageSummaryTests, RejectsUnsupportedVersions)
     const auto ue2 = bytes_of({0xC1, 0x83, 0x2A, 0x9E, 0x45, 0x00, 0x00, 0x00});
     BinaryReader r2(ue2);
     EXPECT_THROW((void)read_package_summary(r2), UnsupportedError);
-    // Version 868 (late UE3, texture allocations not implemented)
-    const auto late = bytes_of({0xC1, 0x83, 0x2A, 0x9E, 0x64, 0x03, 0x00, 0x00});
+    // Version 869 (past the last UE3 file version, 868)
+    const auto late = bytes_of({0xC1, 0x83, 0x2A, 0x9E, 0x65, 0x03, 0x00, 0x00});
     BinaryReader r3(late);
     EXPECT_THROW((void)read_package_summary(r3), UnsupportedError);
 }

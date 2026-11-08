@@ -36,6 +36,9 @@ namespace UnrealLib
         constexpr std::uint16_t vProbeMaskReducedAndIgnoreMaskRemoved = 691;
         constexpr std::uint16_t vForceScriptOrderAddedToUClass = 749;
         constexpr std::uint16_t vSuperReferenceMovedToUStruct = 756;
+        constexpr std::uint16_t vAddedClassGroupsToUClass = 789;
+        constexpr std::uint16_t vAddedNativeClassNameToUClass = 813;
+        constexpr std::uint16_t vAddedAutoCollapseCategoriesToUClass = 671; // upstream: Version > 670
 
         constexpr std::pair<FieldKind, std::string_view> kind_names[] = {
             {FieldKind::Class, "Class"},         {FieldKind::State, "State"},
@@ -204,12 +207,12 @@ namespace UnrealLib
                     data.interfaces.emplace_back(cls, ObjectIndex{reader.read_i32()});
                 }
             }
+            // Editor metadata (absent from console-cooked packages), in upstream UClass.Deserialize order.
             if (!options.console_cooked)
             {
                 if (v >= vAddedDontSortCategoriesToUClass)
                 {
-                    throw UnsupportedError("UClass data of version >= 603 is not supported yet",
-                                           reader.absolute_position());
+                    data.dont_sort_categories = read_name_list(reader);
                 }
                 if (!old_order)
                 {
@@ -220,14 +223,38 @@ namespace UnrealLib
                 {
                     data.auto_expand_categories = read_name_list(reader);
                 }
-                if (v > 575 && v < 673)
+                if (v >= vAddedAutoCollapseCategoriesToUClass)
                 {
-                    (void)reader.read_i32();
+                    data.auto_collapse_categories = read_name_list(reader);
                 }
-            }
-            if (v >= vAddedDLLBindFeature || v >= vForceScriptOrderAddedToUClass)
-            {
-                throw UnsupportedError("UClass data of version >= 655 is not supported yet", reader.absolute_position());
+                if (v >= vForceScriptOrderAddedToUClass)
+                {
+                    data.force_script_order = reader.read_bool32();
+                }
+                if (options.dishonored_class_layout)
+                {
+                    (void)read_fname(reader); // unknown name (upstream `unknownName`)
+                    data.native_class_name = reader.read_string();
+                }
+                else
+                {
+                    if (v >= vAddedClassGroupsToUClass)
+                    {
+                        data.class_groups = read_name_list(reader);
+                    }
+                    if (v >= vAddedNativeClassNameToUClass)
+                    {
+                        data.native_class_name = reader.read_string();
+                    }
+                }
+                if (v >= vAddedDLLBindFeature)
+                {
+                    data.dll_bind_name = read_fname(reader);
+                }
+                if (options.dishonored_class_layout)
+                {
+                    data.class_groups = read_name_list(reader);
+                }
             }
             if (v >= vDisplacedScriptPropertiesWithClassDefaultObject)
             {

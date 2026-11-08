@@ -312,6 +312,49 @@ TEST_F(LinkerTest, ResolvesImportsNestedInForcedExports)
     EXPECT_EQ(invalid.status, ResolveStatus::Invalid);
 }
 
+TEST_F(LinkerTest, ResolvesImportsThroughForcedExportsInOtherPackages)
+{
+    // Seek-free cooking without the original file: "Sounds" exists only as a forced export inside LevelA, and LevelB
+    // imports Sounds.Cue. With the forced-export index the import resolves to LevelA's copy.
+    auto level_a = base_spec();
+    const auto core_a = add_import(level_a, "Core", "Package", {}, "Core");
+    const auto package_class_a = add_import(level_a, "Core", "Class", core_a, "Package");
+    const auto engine_a = add_import(level_a, "Core", "Package", {}, "Engine");
+    const auto cue_class_a = add_import(level_a, "Core", "Class", engine_a, "SoundCue");
+    const auto forced = add_export(level_a, package_class_a, {}, {}, "Sounds");
+    level_a.exports.back().entry.export_flags = ExportFlag::ForcedExport;
+    add_export(level_a, cue_class_a, {}, forced, "Cue");
+    write("LevelA.upk", level_a);
+
+    auto level_b = base_spec();
+    const auto core_b = add_import(level_b, "Core", "Package", {}, "Core");
+    add_import(level_b, "Core", "Class", core_b, "Package");
+    const auto sounds = add_import(level_b, "Core", "Package", {}, "Sounds");
+    add_import(level_b, "Engine", "SoundCue", sounds, "Cue");
+    add_import(level_b, "Engine", "SoundCue", sounds, "Missing");
+    write("LevelB.upk", level_b);
+
+    Linker linker;
+    linker.add_search_path(m_dir);
+    const Package& b = *linker.find_package("LevelB");
+    EXPECT_EQ(linker.resolve(b, import_named(b, "Sounds.Cue")).status, ResolveStatus::PackageNotFound);
+
+    EXPECT_EQ(linker.index_forced_exports(), 1u);
+    ASSERT_EQ(linker.forced_export_index().count("Sounds"), 1u);
+    const Resolution& cue = linker.resolve(b, import_named(b, "Sounds.Cue"));
+    ASSERT_EQ(cue.status, ResolveStatus::Export) << cue.detail;
+    EXPECT_EQ(cue.target.package->name(), "LevelA");
+    EXPECT_EQ(linker.qualified_path(cue.target), "Sounds.Cue");
+    EXPECT_EQ(linker.resolve(b, import_named(b, "Sounds.Missing")).status, ResolveStatus::ObjectNotFound);
+
+    // The index can be shared with another linker over the same files.
+    Linker other;
+    other.add_search_path(m_dir);
+    other.set_forced_export_index(linker.forced_export_index());
+    const Package& b2 = *other.find_package("LevelB");
+    EXPECT_EQ(other.resolve(b2, import_named(b2, "Sounds.Cue")).status, ResolveStatus::Export);
+}
+
 TEST_F(LinkerTest, DuplicatePackagesAndLoadFailures)
 {
     // A corrupt package with the same stem in a later search path is ignored (first wins) ...

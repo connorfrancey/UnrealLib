@@ -11,8 +11,10 @@ purpose. The numbers come from the corpus sweeps (`UNREALLIB_FIXTURE_SWEEP=1`) a
 | | Status |
 |---|---|
 | Mirror's Edge PC (file version 536, licensee 43) | Verified on the whole corpus (profile `mirrorsedge-pc`) |
-| Other UE3 games, file versions 249–766, little-endian | Accepted by the generic profile (`ue3-generic`); version gates follow upstream's `PackageObjectLegacyVersion`, but nothing outside Mirror's Edge has been verified |
-| UE1/UE2 (< 249), late UE3 (≥ 767), UE4/UE5 | Rejected with `UnsupportedError` |
+| Dishonored PC (801, licensee 30) | Profile `dishonored-pc`: all 470 packages, headers, properties, reflection and linking checked ([supported_versions.md](supported_versions.md)) |
+| UDK / late UE3 (up to 868) | Generic profile; A Story About My Uncle (868) checked the same way, textures included; sounds, animations, static meshes and newer skeletal-mesh index buffers not yet |
+| Other UE3 games, file versions 249–868, little-endian | Accepted by the generic profile; version gates follow upstream's `PackageObjectLegacyVersion` |
+| UE1/UE2 (< 249), versions above 868, UE4/UE5 | Rejected with `UnsupportedError` |
 | Big-endian (console) packages | Archive layer and summary round trips only; no profile accepts them |
 | LZX compression (Xbox 360) | Not supported |
 
@@ -24,7 +26,7 @@ purpose. The numbers come from the corpus sweeps (`UNREALLIB_FIXTURE_SWEEP=1`) a
 | Compressed packages (LZO/zlib) | chunk records only, no decompression | full decompression (LZO1X, zlib) and LZO/zlib compression | All 1,553 compressed packages decompress to their declared sizes |
 | Name / import / export / depends tables | yes | yes | Identical to upstream's for all 873 uncompressed packages (upstream cannot read compressed tables); all 2,426 validate |
 | Thumbnails, GUID tables (≥ 584 / ≥ 623) | yes | detected, not parsed | n/a (Mirror's Edge is 536) |
-| Cross-package import resolution | no (per-package objects) | `Linker` | 179,461 imports resolve; the 101 unresolved point at content missing from the modded install |
+| Cross-package import resolution | no (per-package objects) | `Linker` | 179,461 imports resolve to exports, 6,547 to native-only classes or their members; the 90 unresolved point at content missing from the modded install |
 | UObject header (state frame, component template, NetIndex) | yes | yes | 2,525,148 exports |
 | Tagged properties | yes (values as display text) | typed values, byte-exact write-back, text format and parse | 9,656,419 properties re-serialize byte-identically; with a `ReflectionSchema` all 1,639,154 arrays decode; tags of 58,845 script-package objects match upstream's; upstream fails on 381 objects whose properties UnrealLib reads |
 | MapProperty values | yes | kept as raw bytes | none occur in the corpus |

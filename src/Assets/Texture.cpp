@@ -434,6 +434,16 @@ namespace UnrealLib::Assets
         {
             texture.texture_file_cache_guid = reader.read_guid();
         }
+        // Mobile caches of later UE3/UDK builds (upstream UTexture2D.Deserialize).
+        const std::uint16_t version = reader.context().file_version;
+        if (version >= 674) texture.pvrtc_mips = read_mips(reader); // AddedPVRTCToUTexture2D
+        if (version >= 857)                                          // AddedATITCToUTexture2D
+        {
+            texture.flash_mip_max_resolution = reader.read_i32();
+            texture.atitc_mips = read_mips(reader);
+            texture.flash_mip_data = read_bulk_data(reader);
+        }
+        if (version >= 864) texture.etc_mips = read_mips(reader); // AddedETCToUTexture2D
         expect_end(reader, linker.qualified_path(object));
         texture.properties = source.properties;
         return texture;
@@ -462,12 +472,22 @@ namespace UnrealLib::Assets
             throw UnsupportedError(fmt::format("mip {} of '{}' is stored outside the package (flags {})", mip,
                                                texture.name, data.describe_flags()));
         }
+        // A texture with a TextureFileCacheName keeps its separate mips in <name>.tfc (UDK and later UE3 builds);
+        // otherwise they are in the package that owns the texture (Mirror's Edge: the texture's outermost package).
+        if (!texture.texture_file_cache.empty())
+        {
+            if (const auto cache = linker->find_texture_file_cache(texture.texture_file_cache))
+            {
+                return load_bulk_data_from_file(*cache, data, package.context());
+            }
+        }
         const auto file = linker->find_package_file(texture.storage_package);
         if (!file)
         {
-            throw UnsupportedError(fmt::format("mip {} of '{}' is stored in package '{}', which is not in the search "
-                                               "paths",
-                                               mip, texture.name, texture.storage_package));
+            throw UnsupportedError(fmt::format(
+                "mip {} of '{}' is stored in {}, which is not in the search paths", mip, texture.name,
+                texture.texture_file_cache.empty() ? "package '" + texture.storage_package + "'"
+                                                   : "texture file cache '" + texture.texture_file_cache + ".tfc'"));
         }
         return load_bulk_data_from_file(*file, data, package.context());
     }

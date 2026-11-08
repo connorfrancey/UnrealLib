@@ -38,6 +38,15 @@ namespace UnrealLib
     /// @brief Returns "PC", "Xbox360", "PS3" or "Unknown".
     [[nodiscard]] std::string_view to_string(Platform platform) noexcept;
 
+    /// @brief Licensee changes to reflection (UField/UStruct/UClass) serialization.
+    struct ReflectionRules
+    {
+        /// Dishonored (801/30) UClass: an extra name after bForceScriptOrder, NativeClassName in place of the
+        /// standard ClassGroups/NativeClassName pair, and ClassGroups after DLLBindName (upstream UClass.cs,
+        /// `#if DISHONORED`).
+        bool dishonored_class_layout = false;
+    };
+
     /// @brief Licensee changes to asset (native object) serialization.
     struct AssetRules
     {
@@ -75,6 +84,7 @@ namespace UnrealLib
         /// pairs; token names are those of `UnrealLib::to_string(TokenKind)` (e.g. {0x4F, "Unresolved"}).
         std::vector<std::pair<std::uint8_t, std::string>> bytecode_overrides;
         AssetRules assets;     ///< Asset serialization differences.
+        ReflectionRules reflection; ///< Reflection serialization differences.
         bool verified = false; ///< Whether the profile has been verified against real game packages.
         std::string notes;     ///< Provenance of the values.
     };
@@ -91,7 +101,7 @@ namespace UnrealLib
     class GameProfileRegistry
     {
     public:
-        /// @brief The built-in profiles: "mirrorsedge-pc" (verified) and "ue3-generic" (fallback, unverified).
+        /// @brief The built-in profiles: "mirrorsedge-pc" (verified), "dishonored-pc" and "ue3-generic" (fallback).
         [[nodiscard]] static const GameProfileRegistry& builtin();
 
         /// @brief Adds a profile. Throws Error (InvalidArgument) if the id is already registered.

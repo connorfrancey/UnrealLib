@@ -102,6 +102,15 @@ namespace UnrealLib
             return header;
         }
 
+        // Class-specific data serialized before UObject::Serialize (upstream UDominantDirectionalLightComponent).
+        if (input.dominant_light_shadow_map)
+        {
+            const std::uint32_t count = reader.read_array_count(2);
+            std::vector<std::uint16_t> map(count);
+            for (std::uint16_t& v : map) v = reader.read_u16();
+            header.dominant_light_shadow_map = std::move(map);
+        }
+
         if ((input.object_flags & ObjectFlag::HasStack) != 0)
         {
             header.state_frame = read_state_frame(reader);
@@ -142,6 +151,16 @@ namespace UnrealLib
                 writer.write_i32(header.net_index.value_or(-1));
             }
             return;
+        }
+        if (input.dominant_light_shadow_map != header.dominant_light_shadow_map.has_value())
+        {
+            throw SerializationError(ErrorCode::InvalidArgument,
+                                     "DominantLightShadowMap presence does not match the header input");
+        }
+        if (header.dominant_light_shadow_map)
+        {
+            writer.write_i32(static_cast<std::int32_t>(header.dominant_light_shadow_map->size()));
+            for (const std::uint16_t v : *header.dominant_light_shadow_map) writer.write_u16(v);
         }
         const bool has_stack = (input.object_flags & ObjectFlag::HasStack) != 0;
         if (has_stack != header.state_frame.has_value())

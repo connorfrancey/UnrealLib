@@ -312,7 +312,7 @@ RC_GTEST_PROP(PropertyBasedSerialization, PropertyTagsRoundTrip, ())
 {
     // Every tag layout the supported UE3 versions use (FName numbers from 343; EnumName from 633; byte-sized bool
     // values from 673).
-    const auto version = *rc::gen::inRange<std::uint16_t>(343, 767);
+    const auto version = *rc::gen::inRange<std::uint16_t>(343, 869);
     const auto type = *rc::gen::element(PropertyType::Byte, PropertyType::Int, PropertyType::Bool,
                                         PropertyType::Float, PropertyType::Object, PropertyType::Name,
                                         PropertyType::Delegate, PropertyType::Class, PropertyType::Array,

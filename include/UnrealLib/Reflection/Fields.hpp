@@ -213,6 +213,12 @@ namespace UnrealLib
         std::vector<std::pair<FName, ObjectIndex>> component_defaults; ///< ComponentDefaultObjectMap.
         std::vector<std::pair<ObjectIndex, ObjectIndex>> interfaces; ///< Implemented interfaces (class, property).
         std::vector<FName> auto_expand_categories;     ///< autoexpandcategories.
+        std::vector<FName> dont_sort_categories;       ///< dontsortcategories (>= 603).
+        std::vector<FName> auto_collapse_categories;   ///< autocollapsecategories (> 670).
+        bool force_script_order = false;               ///< bForceScriptOrder (>= 749).
+        std::vector<FName> class_groups;               ///< ClassGroup(...) (>= 789).
+        std::string native_class_name;                 ///< Native C++ class name (>= 813), e.g. "UObject".
+        FName dll_bind_name;                           ///< dllbind(...) (>= 655).
         ObjectIndex default_object;                    ///< Class default object (Default__X).
     };
 
@@ -276,6 +282,7 @@ namespace UnrealLib
         const NameTable* names = nullptr;       ///< Name table (required).
         bool console_cooked = false;            ///< Console-cooked package: editor-only fields are stripped.
         bool cooked = false;                    ///< Package is cooked (PackageFlag::Cooked).
+        bool dishonored_class_layout = false;   ///< See ReflectionRules::dishonored_class_layout.
         std::string owner_name;                 ///< Object name (owner of ScriptStruct defaults).
         const PropertySchema* schema = nullptr; ///< Type information for struct defaults.
         Diagnostics* diagnostics = nullptr;     ///< Receives property decoding findings.

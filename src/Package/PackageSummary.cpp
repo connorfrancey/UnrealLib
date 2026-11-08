@@ -200,6 +200,24 @@ namespace UnrealLib
                 s.additional_packages_to_cook.push_back(reader.read_fstring());
             }
         }
+
+        if (ctx.at_least(LegacyVersion::AddedTextureAllocations))
+        {
+            // Each type: SizeX, SizeY, NumMips, Format, TexCreateFlags, TArray<int32> ExportIndices (>= 24 bytes).
+            const std::uint32_t count = reader.read_array_count(24);
+            s.texture_allocations.resize(count);
+            for (TextureAllocation& t : s.texture_allocations)
+            {
+                t.width = reader.read_i32();
+                t.height = reader.read_i32();
+                t.mip_count = reader.read_i32();
+                t.format = reader.read_u32();
+                t.create_flags = reader.read_u32();
+                const std::uint32_t exports = reader.read_array_count(4);
+                t.export_indices.resize(exports);
+                for (std::int32_t& e : t.export_indices) e = reader.read_i32();
+            }
+        }
         return s;
     }
 
@@ -282,6 +300,20 @@ namespace UnrealLib
             for (const auto& name : s.additional_packages_to_cook)
             {
                 writer.write_fstring(name);
+            }
+        }
+        if (ctx.at_least(LegacyVersion::AddedTextureAllocations))
+        {
+            writer.write_i32(static_cast<std::int32_t>(s.texture_allocations.size()));
+            for (const TextureAllocation& t : s.texture_allocations)
+            {
+                writer.write_i32(t.width);
+                writer.write_i32(t.height);
+                writer.write_i32(t.mip_count);
+                writer.write_u32(t.format);
+                writer.write_u32(t.create_flags);
+                writer.write_i32(static_cast<std::int32_t>(t.export_indices.size()));
+                for (const std::int32_t e : t.export_indices) writer.write_i32(e);
             }
         }
     }

@@ -14,7 +14,7 @@ A native C++20 library for reading Unreal Engine 3 packages, ported from the beh
 
 * Bounds-checked binary serialization (`BinaryReader`/`BinaryWriter`, bit streams, CompactIndex, FString with
   lossless Windows-1252/UTF-16 handling) with allocation limits.
-* UE3 package summary parsing and byte-identical re-serialization (file versions 249–766, little and big endian).
+* UE3 package summary parsing and byte-identical re-serialization (file versions 249–868, little and big endian; Mirror's Edge verified, Dishonored and UDK games checked).
 * Fully compressed packages: LZO1X (built-in decoder) and zlib.
 * Name, import, export and depends tables; object paths, class names and lookup.
 * Game profiles with detection (`mirrorsedge-pc`, `ue3-generic`) and explicit selection.

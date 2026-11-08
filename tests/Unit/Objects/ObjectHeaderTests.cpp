@@ -36,6 +36,29 @@ namespace
     }
 }
 
+TEST(ObjectHeaderTests, DominantLightShadowMapPrecedesUObjectData)
+{
+    // UDK 868 Engine.u: Default__DominantDirectionalLight.DominantDirectionalLightComponent0 =
+    // [count 0][TemplateOwnerClass 0][TemplateName][NetIndex] then the tags (properties at byte 20).
+    ObjectHeaderInput input;
+    input.is_component = true;
+    input.is_class_default_template = true;
+    input.dominant_light_shadow_map = true;
+    ObjectHeader header;
+    header.dominant_light_shadow_map = std::vector<std::uint16_t>{};
+    header.component = ComponentTemplate{ObjectIndex{}, FName{0x1C86, 0}};
+    header.net_index = 0x2BB6;
+    EXPECT_EQ(round_trip(868, header, input, 20), header);
+
+    header.dominant_light_shadow_map = std::vector<std::uint16_t>{1, 2, 3};
+    EXPECT_EQ(round_trip(868, header, input, 26), header);
+
+    // The writer insists that the header and the input agree.
+    input.dominant_light_shadow_map = false;
+    BinaryWriter writer(ctx(868));
+    EXPECT_THROW(write_object_header(writer, header, input), SerializationError);
+}
+
 TEST(ObjectHeaderTests, PlainObjectHasOnlyNetIndex)
 {
     // NetIndex -1 followed by the first property tag.

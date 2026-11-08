@@ -61,6 +61,27 @@ namespace UnrealLib
         return p;
     }
 
+    GameProfile make_dishonored_pc_profile()
+    {
+        GameProfile p;
+        p.id = "dishonored-pc";
+        p.name = "Dishonored PC";
+        p.generation = EngineGeneration::UE3;
+        p.platform = Platform::PC;
+        p.min_file_version = 801;
+        p.max_file_version = 801;
+        p.licensee_version = std::uint16_t{30};
+        p.engine_version = 9411;
+        p.cooker_versions = {133};
+        p.endian = Endian::Little;
+        p.compression_methods = {CompressionMethod::None, CompressionMethod::Lzo};
+        p.reflection.dishonored_class_layout = true;
+        p.verified = false;
+        p.notes = "Upstream UELib: GameBuild [Build(801, 30)] Dishonored and its `#if DISHONORED` branches. Steam "
+                  "release: 801/30, engine 9411, cooker 133, LZO; packages, tables and reflection checked.";
+        return p;
+    }
+
     GameProfile make_generic_ue3_profile()
     {
         GameProfile p;
@@ -82,6 +103,7 @@ namespace UnrealLib
         static const GameProfileRegistry registry = [] {
             GameProfileRegistry r;
             r.add(make_mirrors_edge_pc_profile());
+            r.add(make_dishonored_pc_profile());
             r.add(make_generic_ue3_profile());
             return r;
         }();

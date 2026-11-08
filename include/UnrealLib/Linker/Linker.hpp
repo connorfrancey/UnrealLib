@@ -125,6 +125,27 @@ namespace UnrealLib
         /// @brief The file of the package named @p name known from the search paths (not loaded by this call).
         [[nodiscard]] std::optional<std::filesystem::path> find_package_file(std::string_view name) const;
 
+        /// @brief Opens every package of the search paths once and records which ones carry forced exports of
+        ///        other packages (seek-free cooking: e.g. Dishonored ships no `Snd_Player` file, but many levels
+        ///        contain `Snd_Player` as a forced export). Afterwards an import into a package with no file resolves
+        ///        to such a copy. Packages are not kept loaded by the scan; it takes about as long as loading them all.
+        /// @return The number of forced-export packages found.
+        std::size_t index_forced_exports();
+
+        /// @brief Package name -> files that contain it as a forced export (see index_forced_exports()).
+        using ForcedExportIndex = std::unordered_map<std::string, std::vector<std::filesystem::path>,
+                                                     Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual>;
+
+        /// @brief The current forced-export index (empty until index_forced_exports() or set_forced_export_index()).
+        [[nodiscard]] const ForcedExportIndex& forced_export_index() const noexcept { return m_forced_exports; }
+
+        /// @brief Uses an index built by another Linker over the same files (the scan is expensive; share it).
+        void set_forced_export_index(ForcedExportIndex index);
+
+        /// @brief The texture file cache `<name>.tfc` known from the search paths (UE3 builds that store streamed
+        ///        texture mips in caches named by Texture2D's TextureFileCacheName, e.g. UDK).
+        [[nodiscard]] std::optional<std::filesystem::path> find_texture_file_cache(std::string_view name) const;
+
         /// @brief Number of packages currently loaded.
         [[nodiscard]] std::size_t loaded_count() const noexcept { return m_packages.size(); }
 
@@ -192,6 +213,9 @@ namespace UnrealLib
         std::unordered_map<std::string, const Package*, Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual> m_by_name;
         std::unordered_map<std::string, std::filesystem::path, Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual>
             m_index;
+        std::unordered_map<std::string, std::filesystem::path, Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual>
+            m_texture_caches;
+        ForcedExportIndex m_forced_exports;
         std::unordered_map<std::string, std::string, Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual> m_failed;
         std::map<std::pair<const Package*, std::int32_t>, Resolution> m_cache;
         std::unordered_map<const Package*, std::unique_ptr<PackageLookup>> m_lookups;

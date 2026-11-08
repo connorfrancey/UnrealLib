@@ -47,6 +47,21 @@ namespace UnrealLib
     /// @brief Returns the names of the known flags set in @p flags, joined by '|', plus any unknown remainder in hex.
     [[nodiscard]] std::string describe_package_flags(std::uint32_t flags);
 
+    /// @brief One texture allocation record (FTextureAllocations::FTextureType, file version >= 767): textures of one
+    ///        size/format that the cooker grouped for the streaming pool.
+    struct TextureAllocation
+    {
+        std::int32_t width = 0;                  ///< SizeX.
+        std::int32_t height = 0;                 ///< SizeY.
+        std::int32_t mip_count = 0;              ///< NumMips.
+        std::uint32_t format = 0;                ///< EPixelFormat.
+        std::uint32_t create_flags = 0;          ///< TexCreateFlags.
+        std::vector<std::int32_t> export_indices; ///< Exports (0-based) of the textures of this type.
+
+        /// @brief Memberwise comparison.
+        friend bool operator==(const TextureAllocation&, const TextureAllocation&) = default;
+    };
+
     /// @brief One generation record (FGenerationInfo).
     struct GenerationInfo
     {
@@ -107,6 +122,7 @@ namespace UnrealLib
         std::vector<CompressedChunkInfo> compressed_chunks; ///< Fully-compressed package chunks (>= 334).
         std::uint32_t package_source = 0;      ///< CRC of the package source (>= 482).
         std::vector<FString> additional_packages_to_cook; ///< (>= 516)
+        std::vector<TextureAllocation> texture_allocations; ///< Texture pool hints of cooked packages (>= 767).
 
         /// @brief Serialization context implied by this summary (versions + endianness, default limits).
         [[nodiscard]] SerializationContext context() const noexcept;
@@ -121,8 +137,9 @@ namespace UnrealLib
     /// @brief Smallest file version whose summary layout UnrealLib implements.
     inline constexpr std::uint16_t min_supported_file_version = to_value(LegacyVersion::AddedTotalHeaderSize);
 
-    /// @brief File versions at or above this value have a summary tail (texture allocations) that is not parsed.
-    inline constexpr std::uint16_t first_unsupported_file_version = to_value(LegacyVersion::AddedTextureAllocations);
+    /// @brief File versions at or above this value are not UE3 (868 is the last UE3/UDK file version; UE4 packages
+    ///        are recognised by their negative legacy version).
+    inline constexpr std::uint16_t first_unsupported_file_version = 869;
 
     /// @brief Reads a summary starting at the reader's current position (normally 0).
     ///

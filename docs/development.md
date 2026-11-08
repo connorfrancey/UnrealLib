@@ -338,7 +338,7 @@ Reference numbers (MSVC 19.51 x64 Release, 24-thread 4.4 GHz desktop):
 * Decompiler: comments, `cpptext` and `#exec` directives are not stored in cooked packages. Labels in function code are generated (`J0x…`): only state code stores label names.
 * Intrinsic (native-only) classes are recognised by rule — an unexported `Core.Class` import — not from a list; their
   super chain is unknown (`Linker::is_a` returns std::nullopt for them, except "is not a Core.Component").
-* File versions < 249 and ≥ 767, UE4/UE5, and LZX compression are rejected.
+* File versions < 249 and > 868, UE4/UE5, and LZX compression are rejected. For 868 (UDK), sounds, animations, static meshes and skeletal-mesh index buffers ≥ 806 are not read yet.
 * Thumbnail and import/export GUID tables (≥ 584 / ≥ 623) are detected but not parsed.
 * Big-endian (console) packages are handled by the archive layer and summary round-trip tests but not verified
   against real console packages, and no built-in profile accepts them.

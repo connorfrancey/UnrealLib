@@ -100,6 +100,11 @@ namespace UnrealLib::Assets
         BulkData source_art;              ///< Uncooked source art (empty in cooked packages).
         std::vector<TextureMip> mips;     ///< Mip levels, largest first.
         std::optional<Guid> texture_file_cache_guid; ///< Version >= 567.
+        std::vector<TextureMip> pvrtc_mips;    ///< Cached PVRTC mips for mobile (version >= 674; empty on PC).
+        std::int32_t flash_mip_max_resolution = 0; ///< CachedFlashMipMaxResolution (version >= 857).
+        std::vector<TextureMip> atitc_mips;    ///< Cached ATITC mips for mobile (version >= 857).
+        BulkData flash_mip_data;               ///< CachedFlashMipData (version >= 857).
+        std::vector<TextureMip> etc_mips;      ///< Cached ETC mips for mobile (version >= 864).
         AssetProperties properties;       ///< All tagged properties.
 
         /// @brief Index of the largest mip whose payload is stored in this package, if any.

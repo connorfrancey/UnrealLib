@@ -66,11 +66,16 @@ namespace UnrealLib
         bool is_class_default_template = false; ///< The export or one of its outers has ObjectFlag::ClassDefaultObject
                                                 ///< (decides TemplateName for component sub-objects of CDOs).
         bool is_class = false;               ///< The export is a UClass (null class index); no properties follow.
+        /// The class serializes a TArray<uint16> DominantLightShadowMap before UObject data: Engine
+        /// DominantDirectionalLightComponent (version >= 617) and DominantSpotLightComponent (>= 682). Class default
+        /// objects never do (Linker::header_input() decides this from the class hierarchy).
+        bool dominant_light_shadow_map = false;
     };
 
     /// @brief The deserialized UObject prefix of an export.
     struct ObjectHeader
     {
+        std::optional<std::vector<std::uint16_t>> dominant_light_shadow_map; ///< See ObjectHeaderInput.
         std::optional<StateFrame> state_frame;     ///< Present when ObjectFlag::HasStack is set.
         std::optional<ComponentTemplate> component; ///< Present for components (version >= 224).
         std::optional<std::int32_t> net_index;     ///< NetIndex (version >= 322).

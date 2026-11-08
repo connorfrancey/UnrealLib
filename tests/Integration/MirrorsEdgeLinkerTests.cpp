@@ -199,11 +199,22 @@ TEST(MirrorsEdgeLinkerTests, FullCorpusLinking)
     }
     Tally tally;
     std::size_t count = 0;
+    // Seek-free games (e.g. Dishonored) resolve many imports through forced exports in other packages; the index is
+    // built once (UNREALLIB_INDEX_FORCED_EXPORTS=1) and shared. Mirror's Edge does not need it.
+    Linker::ForcedExportIndex forced;
+    if (env("UNREALLIB_INDEX_FORCED_EXPORTS") == "1")
+    {
+        Linker indexer;
+        indexer.add_search_path(fixture_dir());
+        std::cout << "  forced-export packages indexed: " << indexer.index_forced_exports() << '\n';
+        forced = indexer.forced_export_index();
+    }
     for (const auto& file : packages(true))
     {
         // A fresh linker per package keeps memory bounded; script packages are reloaded as needed.
         Linker linker;
         linker.add_search_path(fixture_dir());
+        if (!forced.empty()) linker.set_forced_export_index(forced);
         const Package& package = linker.load(file);
         resolve_all_imports(linker, package, tally);
         check_headers(linker, package, tally);
