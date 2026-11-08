@@ -12,6 +12,7 @@
 #include <UnrealLib/Assets/AssetObject.hpp>
 #include <UnrealLib/Assets/BulkData.hpp>
 #include <UnrealLib/Assets/MeshTypes.hpp>
+#include <UnrealLib/Core/Guid.hpp>
 
 namespace UnrealLib::Assets
 {
@@ -38,7 +39,8 @@ namespace UnrealLib::Assets
         std::vector<Vec3> positions;     ///< Vertex positions.
         std::vector<Vec3> tangents;      ///< Tangent X per vertex (unpacked).
         std::vector<Vec3> normals;       ///< Tangent Z (normal) per vertex (unpacked).
-        std::vector<Color> colors;       ///< Per-vertex color (UV stream color, versions 434..614).
+        std::vector<Color> colors;       ///< Per-vertex color (UV stream color in versions 434..614; from 615 on
+                                         ///< a separate color stream, empty when the mesh has none).
         std::int32_t num_uv_sets = 0;    ///< Texture coordinate sets.
         std::vector<std::vector<Vec2>> uvs; ///< `uvs[set][vertex]`.
         bool full_precision_uvs = true;  ///< UVs stored as floats (else halves).
@@ -46,6 +48,7 @@ namespace UnrealLib::Assets
         std::int32_t num_vertices = 0;   ///< NumVertices field.
         std::vector<std::uint16_t> indices;  ///< Triangle list.
         std::vector<std::uint16_t> wireframe_indices; ///< Line list.
+        std::vector<std::uint16_t> adjacency_indices; ///< Adjacency index buffer (12 per triangle; late UE3).
         std::int32_t num_edges = 0;      ///< Edges (version < 686; kept as a count).
         std::vector<std::uint8_t> shadow_triangle_double_sided; ///< ShadowTriangleDoubleSided (version < 686).
     };
@@ -56,6 +59,14 @@ namespace UnrealLib::Assets
     /// FBoxSphereBounds, BodySetup, kDOP nodes and triangles (bulk arrays), InternalVersion, a name array
     /// (InternalVersion >= 17, versions < 593), the LOD models, ThumbnailAngle (rotator), ThumbnailDistance, and, in
     /// games whose profile sets `AssetRules::static_mesh_trailing_float` (Mirror's Edge), one more float of unknown meaning.
+    ///
+    /// Late UE3 layout (file version 868, verified on A Story About My Uncle): the kDOP tree is the compact form
+    /// (bounding box, 6-byte nodes, 8-byte triangles); InternalVersion is followed by four int32 that are zero in
+    /// cooked meshes (source data, optimization settings, simplification and proxy flags; anything else is rejected
+    /// as unsupported); sections end with a zero byte; the LOD has a color stream (item size, vertex count, colors
+    /// only if any), no shadow stream or edges, and an adjacency index buffer; the mesh ends with an unidentified
+    /// int32, ThumbnailAngle, ThumbnailDistance, HighResSourceMeshName, HighResSourceMeshCRC, LightingGuid,
+    /// VertexPositionVersionNumber, CachedStreamingTextureFactors, bRemoveDegenerates and two more int32.
     struct StaticMesh
     {
         std::string name;                   ///< Object name.
@@ -71,6 +82,15 @@ namespace UnrealLib::Assets
         /// Unidentified trailing float present in every Mirror's Edge static mesh (licensee data: 0.0 in about half of
         /// them, otherwise mostly small whole numbers such as 3.0, 5.0 or 14.0). Kept verbatim.
         std::optional<float> trailing_float;
+        // Late UE3 fields (file version 868).
+        std::int32_t late_leading_value = 0;       ///< Unidentified int32 after the LODs (1 in every mesh seen).
+        std::string high_res_source_mesh_name;     ///< HighResSourceMeshName.
+        std::uint32_t high_res_source_mesh_crc = 0; ///< HighResSourceMeshCRC.
+        Guid lighting_guid;                        ///< LightingGuid.
+        std::int32_t vertex_position_version = 0;  ///< VertexPositionVersionNumber.
+        std::vector<float> streaming_texture_factors; ///< CachedStreamingTextureFactors.
+        bool remove_degenerates = false;           ///< bRemoveDegenerates.
+        std::array<std::int32_t, 2> late_trailer{}; ///< The two int32 after bRemoveDegenerates (unidentified; zero).
         AssetProperties properties;         ///< Tagged properties.
     };
 

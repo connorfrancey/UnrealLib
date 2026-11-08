@@ -361,8 +361,74 @@ TEST(AnimationTests, Fixed32NoWBitLayoutAndErrors)
 
     seq.track_offsets = {0, 0, 1000, 2};
     EXPECT_THROW(decode_anim_tracks(seq, true), SerializationError);
-    seq.key_format = AnimKeyFormat::VariableKeyLerp;
+    seq.key_format = AnimKeyFormat::Unknown;
     EXPECT_THROW(decode_anim_tracks(seq, true), UnsupportedError);
     EXPECT_EQ(anim_compression_from_name("ACF_Fixed48NoW"), AnimCompression::Fixed48NoW);
     EXPECT_EQ(anim_key_format_from_name("AKF_PerTrackCompression"), AnimKeyFormat::PerTrackCompression);
+}
+
+TEST(AnimationTests, DecodesVariableKeyLerpFrameTables)
+{
+    // One track: three float translation keys at frames 0, 2 and 9, then the frame table (bytes: < 256 frames),
+    // padded to 4 bytes. No rotation keys.
+    BinaryWriter w;
+    for (const float f : {0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 9.0f, 0.0f, 0.0f}) w.write_f32(f);
+    for (const std::uint8_t f : std::array<std::uint8_t, 4>{0, 2, 9, 0x55}) w.write_u8(f);
+    AnimSequence seq;
+    seq.num_frames = 10;
+    seq.key_format = AnimKeyFormat::VariableKeyLerp;
+    seq.translation_format = AnimCompression::Float96NoW;
+    seq.track_offsets = {0, 3, 0, 0};
+    for (const std::byte b : w.take()) seq.stream.push_back(std::to_integer<std::uint8_t>(b));
+    decode_anim_tracks(seq, false);
+    ASSERT_EQ(seq.tracks.size(), 1u);
+    EXPECT_EQ(seq.stream_bytes_used, seq.stream.size());
+    EXPECT_EQ(seq.tracks[0].position_frames, (std::vector<float>{0.0f, 2.0f, 9.0f}));
+
+    // Frame 5 lies 3/7 of the way from the key at frame 2 to the key at frame 9.
+    Vec3 p;
+    Quat q;
+    seq.tracks[0].sample(5, 10, p, q);
+    EXPECT_FLOAT_EQ(p.x, 5.0f);
+    seq.tracks[0].sample(9, 10, p, q);
+    EXPECT_FLOAT_EQ(p.x, 9.0f);
+}
+
+TEST(AnimationTests, DecodesPerTrackCompression)
+{
+    // Track 0: translation Float96NoW with only X present (mask 1), 1 key; rotation Fixed48NoW with mask 7 and two
+    // keys plus a frame table (flag 8). Track 1: identity translation (-1); rotation IntervalFixed32NoW with Y only.
+    BinaryWriter w;
+    w.write_u32((1u << 28) | (1u << 24) | 1u);
+    w.write_f32(42.0f);
+    const auto rot0 = static_cast<std::int32_t>(w.position());
+    w.write_u32((2u << 28) | (15u << 24) | 2u);
+    for (const std::uint16_t v : std::array<std::uint16_t, 6>{32767, 32767, 32767, 65534, 32767, 32767}) w.write_u16(v);
+    for (const std::uint8_t f : std::array<std::uint8_t, 4>{0, 4, 0x55, 0x55}) w.write_u8(f);
+    const auto rot1 = static_cast<std::int32_t>(w.position());
+    w.write_u32((3u << 28) | (2u << 24) | 1u);
+    w.write_f32(0.25f); // min Y
+    w.write_f32(0.5f);  // range Y
+    w.write_u32((1023u << 21) | (2046u << 10) | 511u); // Y: (2046 / 1023 - 1) * 0.5 + 0.25 = 0.75
+    AnimSequence seq;
+    seq.num_frames = 5;
+    seq.key_format = AnimKeyFormat::PerTrackCompression;
+    seq.track_offsets = {0, rot0, -1, rot1};
+    for (const std::byte b : w.take()) seq.stream.push_back(std::to_integer<std::uint8_t>(b));
+    decode_anim_tracks(seq, false);
+
+    ASSERT_EQ(seq.tracks.size(), 2u);
+    EXPECT_EQ(seq.stream_bytes_used, seq.stream.size());
+    EXPECT_EQ(seq.tracks[0].positions, (std::vector<Vec3>{{42.0f, 0.0f, 0.0f}}));
+    ASSERT_EQ(seq.tracks[0].rotations.size(), 2u);
+    EXPECT_FLOAT_EQ(seq.tracks[0].rotations[0].w, 1.0f);
+    EXPECT_NEAR(seq.tracks[0].rotations[1].x, 1.0f, 1e-4f);
+    EXPECT_EQ(seq.tracks[0].rotation_frames, (std::vector<float>{0.0f, 4.0f}));
+    EXPECT_EQ(seq.tracks[1].positions, (std::vector<Vec3>{{}}));
+    ASSERT_EQ(seq.tracks[1].rotations.size(), 1u);
+    EXPECT_NEAR(seq.tracks[1].rotations[0].y, 0.75f, 1e-6f);
+    EXPECT_NEAR(seq.tracks[1].rotations[0].x, 0.0f, 1e-6f);
+
+    seq.track_offsets = {0, rot0, -1};
+    EXPECT_THROW(decode_anim_tracks(seq, false), SerializationError);
 }

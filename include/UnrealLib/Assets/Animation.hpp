@@ -18,8 +18,8 @@ namespace UnrealLib::Assets
     enum class AnimKeyFormat : std::uint8_t
     {
         ConstantKeyLerp,  ///< Keys evenly spaced over the sequence.
-        VariableKeyLerp,  ///< Keys with frame times (not supported: unused by Mirror's Edge).
-        PerTrackCompression, ///< Per-track formats (not supported: unused by Mirror's Edge).
+        VariableKeyLerp,  ///< Like ConstantKeyLerp, plus a frame table per multi-key track.
+        PerTrackCompression, ///< Each track has its own codec, component mask and optional frame table.
         Unknown,
     };
 
@@ -47,18 +47,25 @@ namespace UnrealLib::Assets
     {
         std::vector<Vec3> positions; ///< Translation keys (empty: use the reference pose).
         std::vector<Quat> rotations; ///< Rotation keys (empty: use the reference pose).
+        std::vector<float> position_frames; ///< Frame of each translation key (empty: evenly spaced).
+        std::vector<float> rotation_frames; ///< Frame of each rotation key (empty: evenly spaced).
 
-        /// @brief Samples frame @p frame of @p num_frames: keys are evenly spaced (ConstantKeyLerp); positions are
-        ///        lerped and rotations nlerped between neighbours. Empty tracks give the identity.
+        /// @brief Samples frame @p frame of @p num_frames: keys are evenly spaced unless the track has key frames
+        ///        (VariableKeyLerp, PerTrackCompression); positions are lerped and rotations nlerped between
+        ///        neighbours. Empty tracks give the identity.
         void sample(std::int32_t frame, std::int32_t num_frames, Vec3& position, Quat& rotation) const;
     };
 
     /// @brief An AnimSequence export.
     ///
-    /// Native data (file versions < 577): the CompressedByteStream (TArray<byte>). The track layout comes from the
-    /// properties: CompressedTrackOffsets holds (translation offset, translation keys, rotation offset, rotation keys)
-    /// per track. Below version 761 multi-key rotation tracks start with 24 bytes of mins/ranges. Tracks are aligned
-    /// to 4 bytes. Format reference: UE Viewer.
+    /// Native data: from file version 577 on, RawAnimData (a bulk-serialized array of raw tracks: position keys, then
+    /// rotation keys, each array prefixed by its element size and count); then the CompressedByteStream
+    /// (TArray<byte>). The track layout comes from the properties. For ConstantKeyLerp and VariableKeyLerp,
+    /// CompressedTrackOffsets holds (translation offset, translation keys, rotation offset, rotation keys) per track;
+    /// below version 761 multi-key rotation tracks start with 24 bytes of mins/ranges, and VariableKeyLerp follows
+    /// each multi-key array with a frame table. For PerTrackCompression it holds (translation offset, rotation
+    /// offset) per track (-1: identity), and each track starts with a packed header (codec, component mask, key
+    /// count, frame-table flag). Tracks are aligned to 4 bytes. Format reference: UE Viewer.
     struct AnimSequence
     {
         std::string name;                   ///< Object name.
@@ -73,6 +80,8 @@ namespace UnrealLib::Assets
         std::vector<std::int32_t> track_offsets; ///< CompressedTrackOffsets.
         std::vector<std::uint8_t> stream;   ///< CompressedByteStream.
         std::vector<AnimTrack> tracks;      ///< Decoded tracks (one per AnimSet bone).
+        std::vector<AnimTrack> raw_tracks;  ///< RawAnimData (file version >= 577; often one key per track when
+                                            ///< cooked).
         std::size_t stream_bytes_used = 0;  ///< Bytes covered by the decoded tracks (with alignment).
         AssetProperties properties;         ///< Tagged properties.
 
@@ -90,8 +99,10 @@ namespace UnrealLib::Assets
                                                   const PropertySchema* schema = nullptr);
 
     /// @brief Decodes @p sequence.stream into @p sequence.tracks (called by read_anim_sequence()).
-    /// @throws UnsupportedError for key formats/codecs other than ConstantKeyLerp with None, Float96NoW, Fixed48NoW,
-    ///         Fixed32NoW or Identity; SerializationError if a track leaves the stream.
+    /// @param sequence The sequence to decode.
+    /// @param ranges_before_rotations Whether every multi-key rotation track of a ConstantKeyLerp/VariableKeyLerp
+    ///        stream starts with mins/ranges (file versions below 761), not only IntervalFixed32NoW ones.
+    /// @throws UnsupportedError for an unknown key format or codec; SerializationError if a track leaves the stream.
     void decode_anim_tracks(AnimSequence& sequence, bool ranges_before_rotations);
 
     /// @brief An AnimSet export: the bones its sequences animate.

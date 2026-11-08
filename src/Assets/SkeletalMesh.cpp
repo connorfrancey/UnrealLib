@@ -25,7 +25,27 @@ namespace UnrealLib::Assets
             std::uint16_t version = 0;
             int chunk_uv_sets = 1;
             const AssetRules* assets = nullptr;
+            bool late = false;              // file version >= late_skeletal_mesh_version
+            bool has_vertex_colors = false; // bHasVertexColors property
         };
+
+        /// First file version with the late UE3 SkeletalMesh layout UnrealLib reads (see SkeletalMesh).
+        constexpr std::uint16_t late_skeletal_mesh_version = 868;
+
+        /// FMultiSizeIndexContainer (file version >= 806): bNeedsCPUAccess, element size, bulk array.
+        std::vector<std::uint32_t> read_multi_size_indices(BinaryReader& r, std::string_view what)
+        {
+            (void)r.read_i32(); // bNeedsCPUAccess
+            const std::uint8_t type_size = r.read_u8();
+            if (type_size != 2 && type_size != 4)
+            {
+                throw SerializationError(fmt::format("{}: index size {}", what, type_size));
+            }
+            const BulkArrayHeader h = read_bulk_array_header(r, type_size, what);
+            std::vector<std::uint32_t> out(h.count);
+            for (auto& i : out) i = type_size == 2 ? r.read_u16() : r.read_u32();
+            return out;
+        }
 
         std::vector<std::uint16_t> read_u16_array(BinaryReader& r)
         {
@@ -70,8 +90,9 @@ namespace UnrealLib::Assets
             c.first_vertex = r.read_i32();
             // Rigid: position, 3 packed normals, UV sets, bone index. Soft: ... 4 bone indices, 4 weights.
             const std::size_t uv_bytes = static_cast<std::size_t>(rules.chunk_uv_sets) * 8;
-            const std::size_t rigid_size = 12 + 12 + uv_bytes + 1;
-            const std::size_t soft_size = 12 + 12 + uv_bytes + 8;
+            const std::size_t color_bytes = rules.late ? 4 : 0;
+            const std::size_t rigid_size = 12 + 12 + uv_bytes + color_bytes + 1;
+            const std::size_t soft_size = 12 + 12 + uv_bytes + color_bytes + 8;
             c.stored_rigid_vertices = r.read_array_count(rigid_size);
             (void)r.read_view(c.stored_rigid_vertices * rigid_size);
             c.stored_soft_vertices = r.read_array_count(soft_size);
@@ -94,9 +115,13 @@ namespace UnrealLib::Assets
                 throw SerializationError(fmt::format("skeletal GPU skin has {} UV sets", lod.num_uv_sets));
             }
             lod.full_precision_uvs = r.read_bool32();
-            if (rules.version >= 592)
+            if (rules.late)
             {
-                throw UnsupportedError("skeletal GPU skin of file version >= 592 is not supported");
+                // bUsePackedPosition, MeshExtension, MeshOrigin. PC packages keep float positions even when the flag
+                // is set; the element size below tells.
+                (void)r.read_i32();
+                (void)read_vec3(r);
+                (void)read_vec3(r);
             }
             const auto uv_size = static_cast<std::uint32_t>(lod.full_precision_uvs ? 8 : 4);
             const std::uint32_t vertex_size = 12 + 8 + 8 + uv_size * static_cast<std::uint32_t>(lod.num_uv_sets);
@@ -104,11 +129,12 @@ namespace UnrealLib::Assets
             lod.vertices.resize(h.count);
             for (SkinnedVertex& v : lod.vertices)
             {
-                v.position = read_vec3(r); // before the normals below version 592
+                if (!rules.late) v.position = read_vec3(r); // before the normals below version 592
                 v.tangent = unpack_normal(r.read_u32());
                 v.normal = unpack_normal(r.read_u32());
                 for (auto& b : v.bones) b = r.read_u8();
                 for (auto& w : v.weights) w = r.read_u8();
+                if (rules.late) v.position = read_vec3(r);
                 for (int i = 0; i < lod.num_uv_sets; ++i)
                 {
                     if (lod.full_precision_uvs)
@@ -141,11 +167,14 @@ namespace UnrealLib::Assets
             }
             if (rules.version >= 806)
             {
-                throw UnsupportedError("skeletal index buffers of file version >= 806 are not supported");
+                lod.indices = read_multi_size_indices(r, "SkeletalMesh indices");
             }
-            const BulkArrayHeader indices = read_bulk_array_header(r, 2, "SkeletalMesh indices");
-            lod.indices.resize(indices.count);
-            for (auto& i : lod.indices) i = r.read_u16();
+            else
+            {
+                const BulkArrayHeader indices = read_bulk_array_header(r, 2, "SkeletalMesh indices");
+                lod.indices.resize(indices.count);
+                for (auto& i : lod.indices) i = r.read_u16();
+            }
             if (rules.version < 297) (void)r.read_i32();
             if (rules.version < 686) lod.shadow_indices = read_u16_array(r);
             lod.active_bones = read_i16_array(r);
@@ -163,7 +192,26 @@ namespace UnrealLib::Assets
             lod.raw_point_indices = read_bulk_data(r);
             if (rules.version >= 709 && !rules.assets->skeletal_gpu_uv_count) (void)r.read_i32();
             read_gpu_skin(r, lod, rules);
-            if (!rules.assets->skeletal_lod_ends_after_gpu_skin && rules.version >= 534)
+            if (rules.late)
+            {
+                if (rules.has_vertex_colors)
+                {
+                    const BulkArrayHeader colors = read_bulk_array_header(r, 4, "SkeletalMesh vertex colors");
+                    if (colors.count != lod.vertices.size())
+                    {
+                        throw SerializationError(fmt::format("skeletal vertex colors: {} for {} vertices", colors.count,
+                                                             lod.vertices.size()));
+                    }
+                    lod.colors.reserve(colors.count);
+                    for (std::uint32_t i = 0; i < colors.count; ++i) lod.colors.push_back(read_color(r));
+                }
+                if (const std::int32_t influences = r.read_i32(); influences != 0)
+                {
+                    throw UnsupportedError(fmt::format("skeletal VertexInfluences ({}) are not supported", influences));
+                }
+                lod.adjacency_indices = read_multi_size_indices(r, "SkeletalMesh adjacency indices");
+            }
+            else if (!rules.assets->skeletal_lod_ends_after_gpu_skin && rules.version >= 534)
             {
                 throw UnsupportedError("skeletal ExtraVertexInfluences are not supported");
             }
@@ -199,7 +247,7 @@ namespace UnrealLib::Assets
                     throw SerializationError("skeletal section exceeds the index buffer");
                 }
             }
-            for (const std::uint16_t i : lod.indices)
+            for (const std::uint32_t i : lod.indices)
             {
                 if (i >= lod.vertices.size())
                 {
@@ -223,11 +271,13 @@ namespace UnrealLib::Assets
         Rules rules;
         rules.version = r.context().file_version;
         rules.assets = &package.profile().assets;
-        if (rules.version < 493)
+        if (rules.version < 493 || (rules.version >= 592 && rules.version < late_skeletal_mesh_version))
         {
             throw UnsupportedError(fmt::format("SkeletalMesh layout of file version {} is not supported", rules.version));
         }
         rules.chunk_uv_sets = rules.version >= 709 ? 4 : std::max(1, int{rules.assets->skeletal_chunk_uv_sets});
+        rules.late = rules.version >= late_skeletal_mesh_version;
+        rules.has_vertex_colors = source.properties.get_bool("bHasVertexColors").value_or(false);
 
         SkeletalMesh mesh;
         mesh.name = package.object_name(object.index);
@@ -266,6 +316,24 @@ namespace UnrealLib::Assets
                 for (std::uint32_t v = 0; v < verts; ++v) c.vertices.push_back(read_vec3(r));
                 mesh.per_poly_collision.push_back(std::move(c));
             }
+        }
+        if (rules.late)
+        {
+            const std::uint32_t break_names = r.read_array_count(4);
+            for (std::uint32_t i = 0; i < break_names; ++i) mesh.bone_break_names.push_back(r.read_string());
+            mesh.bone_break_options = read_u8_array(r);
+            mesh.late_lod_entries = r.read_array_count(4);
+            for (std::size_t i = 0; i < mesh.late_lod_entries; ++i)
+            {
+                if (const std::int32_t n = r.read_i32(); n != 0)
+                {
+                    throw UnsupportedError(fmt::format("SkeletalMesh per-LOD array entry with {} elements is not "
+                                                       "supported", n));
+                }
+            }
+            const std::uint32_t factors = r.read_array_count(4);
+            for (std::uint32_t i = 0; i < factors; ++i) mesh.streaming_texture_factors.push_back(r.read_f32());
+            mesh.late_trailer = r.read_i32();
         }
         expect_end(r, linker.qualified_path(object));
 
@@ -366,7 +434,8 @@ namespace UnrealLib::Assets
             for (std::int32_t t = 0; t < sec.num_triangles; ++t)
             {
                 const auto at = [&](int k) {
-                    return lod.indices[static_cast<std::size_t>(sec.first_index + t * 3 + k)];
+                    // PSK wedge indices are 16-bit; to_psk() rejects meshes above 65536 vertices.
+                    return static_cast<std::uint16_t>(lod.indices[static_cast<std::size_t>(sec.first_index + t * 3 + k)]);
                 };
                 w.write_u16(at(1)); // mirrored: swap the first two corners
                 w.write_u16(at(0));

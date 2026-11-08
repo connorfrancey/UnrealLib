@@ -48,7 +48,8 @@ namespace UnrealLib::Assets
 
     const BulkData* SoundWave::best_payload() const noexcept
     {
-        for (const BulkData* b : {&raw_data, &compressed_pc, &compressed_xbox360, &compressed_ps3})
+        for (const BulkData* b : {&raw_data, &compressed_pc, &compressed_xbox360, &compressed_ps3, &compressed_wiiu,
+                               &compressed_iphone, &compressed_flash})
         {
             if (b->has_payload() && b->is_inline()) return b;
         }
@@ -66,7 +67,7 @@ namespace UnrealLib::Assets
         BinaryReader reader = source.native_reader();
         const std::uint16_t version = reader.context().file_version;
         // Upstream USoundNodeWave.Deserialize gates (PackageObjectLegacyVersion).
-        if (version < 380 || version >= 845)
+        if (version < 380)
         {
             throw UnsupportedError(fmt::format("SoundNodeWave layout of file version {} is not supported", version));
         }
@@ -86,6 +87,9 @@ namespace UnrealLib::Assets
         sound.compressed_pc = read_bulk_data(reader);
         sound.compressed_xbox360 = read_bulk_data(reader);
         sound.compressed_ps3 = read_bulk_data(reader);
+        if (version >= 845) sound.compressed_wiiu = read_bulk_data(reader);   // AddedWiiUSoundData
+        if (version >= 851) sound.compressed_iphone = read_bulk_data(reader); // AddedIPhoneSoundData
+        if (version >= 854) sound.compressed_flash = read_bulk_data(reader);  // AddedFlashSoundData
         expect_end(reader, linker.qualified_path(object));
         sound.properties = source.properties;
         return sound;

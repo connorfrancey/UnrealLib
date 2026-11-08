@@ -45,6 +45,9 @@ namespace UnrealLib::Assets
         BulkData compressed_pc;            ///< PC cooked data (Ogg Vorbis).
         BulkData compressed_xbox360;       ///< Xbox 360 cooked data.
         BulkData compressed_ps3;           ///< PS3 cooked data.
+        BulkData compressed_wiiu;          ///< Wii U cooked data (file version >= 845).
+        BulkData compressed_iphone;        ///< iPhone cooked data (file version >= 851).
+        BulkData compressed_flash;         ///< Flash cooked data (file version >= 854).
         AssetProperties properties;        ///< All tagged properties.
 
         /// @brief The record extract_sound() uses: RawData if present, else the PC, Xbox 360 or PS3 data.

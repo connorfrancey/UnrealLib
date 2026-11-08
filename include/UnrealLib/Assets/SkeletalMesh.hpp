@@ -62,7 +62,7 @@ namespace UnrealLib::Assets
     struct SkeletalLod
     {
         std::vector<SkeletalSection> sections;  ///< Sections.
-        std::vector<std::uint16_t> indices;     ///< Triangle list.
+        std::vector<std::uint32_t> indices;     ///< Triangle list (16-bit in the file, or 16/32-bit from 806 on).
         std::vector<std::uint16_t> shadow_indices; ///< ShadowIndices (version < 686).
         std::vector<std::int16_t> active_bones; ///< Bones used by this LOD.
         std::vector<std::uint8_t> shadow_triangle_double_sided; ///< Version < 686.
@@ -75,6 +75,8 @@ namespace UnrealLib::Assets
         std::int32_t num_uv_sets = 1;           ///< UV sets in the GPU vertices.
         bool full_precision_uvs = false;        ///< GPU vertex UVs stored as floats (else halves).
         std::vector<SkinnedVertex> vertices;    ///< GPU skin vertex buffer.
+        std::vector<Color> colors;              ///< Vertex colors (late UE3, if the mesh has bHasVertexColors).
+        std::vector<std::uint32_t> adjacency_indices; ///< Adjacency index buffer (late UE3).
     };
 
     /// @brief Per-bone polygon collision (FPerPolyBoneCollisionData).
@@ -91,6 +93,14 @@ namespace UnrealLib::Assets
     /// mesh; format reference: UE Viewer): [licensee int32], FBoxSphereBounds, material references, origin,
     /// rotation origin, reference skeleton, skeletal depth, LOD models, a name-to-bone map, then PerPolyKDOPs
     /// (non-empty in a single Mirror's Edge mesh, which verifies that layout only once).
+    ///
+    /// Late UE3 layout (file version 868, verified on A Story About My Uncle): index buffers are multi-size containers
+    /// (bNeedsCPUAccess, element size 2 or 4, bulk array); chunk vertices carry a color; the LOD has NumTexCoords before
+    /// the GPU skin, which starts with bUsePackedPosition, MeshExtension and MeshOrigin and stores tangents, influences,
+    /// position and UVs per vertex; then the vertex colors (if bHasVertexColors), VertexInfluences (only an empty
+    /// array is supported) and an adjacency index container. After PerPolyKDOPs come BoneBreakNames,
+    /// BoneBreakOptions, a per-LOD array (only empty entries are supported), CachedStreamingTextureFactors and one
+    /// more int32. File versions 592..867 are not supported.
     struct SkeletalMesh
     {
         std::string name;                       ///< Object name.
@@ -104,6 +114,12 @@ namespace UnrealLib::Assets
         std::vector<SkeletalLod> lods;          ///< LOD models.
         std::vector<std::pair<std::string, std::int32_t>> name_index_map; ///< Bone name -> index.
         std::vector<PerPolyCollision> per_poly_collision; ///< PerPolyKDOPs (version >= 435).
+        // Late UE3 fields (file version 868).
+        std::vector<std::string> bone_break_names;     ///< BoneBreakNames.
+        std::vector<std::uint8_t> bone_break_options;  ///< BoneBreakOptions.
+        std::size_t late_lod_entries = 0;              ///< Entries of the unidentified per-LOD array (all empty).
+        std::vector<float> streaming_texture_factors;  ///< CachedStreamingTextureFactors.
+        std::int32_t late_trailer = 0;                 ///< Last int32 (unidentified; zero).
         AssetProperties properties;             ///< Tagged properties.
     };
 

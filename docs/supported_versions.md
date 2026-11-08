@@ -23,6 +23,9 @@ Checked with the corpus sweeps pointed at two more Steam installations (`UNREALL
 | Reflection + bytecode | 12,801 scripts, 487,178 tokens, 0 failures | 4,785 scripts, 0 failures |
 | Import resolution | 6,046 exports, 278 intrinsic; the rest point at packages the game does not ship | 105,707 exports, 3,136 intrinsic (with `index_forced_exports()`); 7 to editor/unshipped packages, 48 objects absent from the forced copies |
 | Textures | all 874 decode (430 from `.tfc` texture file caches) | not yet swept |
+| Sounds | all 579 SoundNodeWaves read, 579 Ogg payloads extracted | not yet swept |
+| Animations | all 358 AnimSequences decode (309 per-track, 46 variable-key); frame 0 of 25,913 tracks matches RawAnimData | not yet swept |
+| Meshes | all 85 StaticMeshes (34,608 vertices) and 18 SkeletalMeshes (81,225 vertices) read, native data consumed exactly | not yet swept (801 mesh layouts are not supported) |
 | Package rewrite | 30 / 30 round-trip | not yet swept |
 
 What made these work (all gated by file version or profile, so Mirror's Edge is unchanged):
@@ -37,10 +40,19 @@ What made these work (all gated by file version or profile, so Mirror's Edge is 
   (`Linker::find_texture_file_cache`);
 * imports of members of native-only classes classify as intrinsic;
 * seek-free games without the original package files: `Linker::index_forced_exports()` resolves imports through
-  forced exports in other packages.
+  forced exports in other packages;
+* SoundNodeWave Wii U / iPhone / Flash payloads (≥ 845 / 851 / 854, from upstream);
+* AnimSequence RawAnimData (≥ 577) and the AKF_VariableKeyLerp and AKF_PerTrackCompression key formats, with the
+  IntervalFixed32NoW, Float32NoW and translation Fixed48NoW / IntervalFixed32NoW codecs (layouts from UE Viewer);
+* the 868 StaticMesh layout (compact kDOP tree, section platform flag, color stream, adjacency index buffer and the
+  late trailing fields) and SkeletalMesh layout (multi-size index containers with 16- or 32-bit indices, chunk vertex
+  colors, the ≥ 592 GPU skin vertex order, vertex colors, adjacency indices and the late trailing fields), worked
+  out from the packages themselves: upstream UELib has no mesh serializers. A few trailing fields are kept
+  unidentified (see the `StaticMesh` / `SkeletalMesh` API docs).
 
-Not supported yet for these versions: SoundNodeWave, AnimSequence and StaticMesh layouts of 868, skeletal-mesh index
-buffers ≥ 806 (the readers reject them with `UnsupportedError`).
+Not supported yet: StaticMesh layouts of file versions 770–867 and SkeletalMesh layouts of 592–867 (only 536 and 868
+are verified; the readers reject the versions in between with `UnsupportedError`), non-empty skeletal
+VertexInfluences, packed (console) skeletal positions.
 
 ## Mirror's Edge PC — verification record
 

@@ -12,7 +12,7 @@ purpose. The numbers come from the corpus sweeps (`UNREALLIB_FIXTURE_SWEEP=1`) a
 |---|---|
 | Mirror's Edge PC (file version 536, licensee 43) | Verified on the whole corpus (profile `mirrorsedge-pc`) |
 | Dishonored PC (801, licensee 30) | Profile `dishonored-pc`: all 470 packages, headers, properties, reflection and linking checked ([supported_versions.md](supported_versions.md)) |
-| UDK / late UE3 (up to 868) | Generic profile; A Story About My Uncle (868) checked the same way, textures included; sounds, animations, static meshes and newer skeletal-mesh index buffers not yet |
+| UDK / late UE3 (up to 868) | Generic profile; A Story About My Uncle (868) checked the same way, including every texture, sound, animation, static and skeletal mesh; mesh layouts between 770/592 and 867 are not supported |
 | Other UE3 games, file versions 249–868, little-endian | Accepted by the generic profile; version gates follow upstream's `PackageObjectLegacyVersion` |
 | UE1/UE2 (< 249), versions above 868, UE4/UE5 | Rejected with `UnsupportedError` |
 | Big-endian (console) packages | Archive layer and summary round trips only; no profile accepts them |

@@ -64,6 +64,7 @@ namespace
         std::size_t skeletal_dumped = 0;
         std::size_t anim_keys = 0;
         std::map<std::string, std::size_t> anim_formats;
+        std::size_t anim_raw_tracks_compared = 0;
         std::map<std::string, std::size_t> anim_set_bones;
         std::map<std::string, std::size_t> uv_sets;
         std::size_t polygons = 0;
@@ -202,7 +203,8 @@ namespace
                 {
                     const AnimSequence seq = read_anim_sequence(linker, ref);
                     ++tally.read[cls];
-                    ++tally.anim_formats[std::string(1, static_cast<char>('0' + static_cast<int>(seq.rotation_format)))];
+                    ++tally.anim_formats["key format " + std::to_string(static_cast<int>(seq.key_format)) +
+                                         ", rotation codec " + std::to_string(static_cast<int>(seq.rotation_format))];
                     tally.anim_keys += seq.num_frames;
                     // The decoded tracks must cover the byte stream exactly, and every rotation be a unit quaternion.
                     if (seq.stream_bytes_used != seq.stream.size())
@@ -210,6 +212,30 @@ namespace
                         tally.fail(cls, linker.qualified_path(ref),
                                    "tracks cover " + std::to_string(seq.stream_bytes_used) + " of " +
                                        std::to_string(seq.stream.size()) + " bytes");
+                    }
+                    // Where the package kept RawAnimData, frame 0 of every compressed track must match it.
+                    if (seq.raw_tracks.size() == seq.tracks.size())
+                    {
+                        for (std::size_t t = 0; t < seq.tracks.size(); ++t)
+                        {
+                            const AnimTrack& raw = seq.raw_tracks[t];
+                            if (raw.positions.empty() || raw.rotations.empty()) continue;
+                            Vec3 p;
+                            Quat q;
+                            seq.tracks[t].sample(0, seq.num_frames, p, q);
+                            const Vec3& rp = raw.positions[0];
+                            const Quat& rq = raw.rotations[0];
+                            const float dot = std::abs(q.x * rq.x + q.y * rq.y + q.z * rq.z + q.w * rq.w);
+                            const float dist = std::sqrt((p.x - rp.x) * (p.x - rp.x) + (p.y - rp.y) * (p.y - rp.y) + (p.z - rp.z) * (p.z - rp.z));
+                            ++tally.anim_raw_tracks_compared;
+                            if (dot < 0.999f || dist > 1.0f) // key reduction may drift ~0.1-0.3 units from the raw data
+                            {
+                                tally.fail(cls, linker.qualified_path(ref),
+                                           "frame 0 differs from RawAnimData (rotation dot " + std::to_string(dot) +
+                                               ", position distance " + std::to_string(dist) + ")");
+                                break;
+                            }
+                        }
                     }
                     for (const auto& track : seq.tracks)
                     {
@@ -326,7 +352,8 @@ namespace
                     const SoundWave sound = read_sound_wave(linker, ref);
                     ++tally.read[cls];
                     for (const BulkData* b : {&sound.raw_data, &sound.compressed_pc, &sound.compressed_xbox360,
-                                              &sound.compressed_ps3})
+                                              &sound.compressed_ps3, &sound.compressed_wiiu,
+                                              &sound.compressed_iphone, &sound.compressed_flash})
                     {
                         ++tally.sound_flags[flags_key(*b)];
                     }
@@ -369,9 +396,11 @@ namespace
         print_map("audio containers", tally.containers);
         print_map("static mesh UV sets", tally.uv_sets);
         print_map("anim sets", tally.anim_set_bones);
+        print_map("anim formats", tally.anim_formats);
         std::cout << "  static mesh vertices: " << tally.mesh_vertices << ", triangles: " << tally.mesh_triangles << '\n'
                   << "  brush polygons: " << tally.polygons << ", BSP surfaces: " << tally.model_surfaces
                   << ", models with Polys: " << tally.models_with_polys << '\n'
+                  << "  anim tracks checked against RawAnimData: " << tally.anim_raw_tracks_compared << '\n'
                   << "  skeletal mesh bones: " << tally.skeletal_bones << ", vertices: " << tally.skeletal_vertices
                   << '\n';
         std::cout << "  textures decoded: " << tally.textures_decoded

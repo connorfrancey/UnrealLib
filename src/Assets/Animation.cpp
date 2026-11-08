@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 
 #include <fmt/format.h>
@@ -135,31 +136,56 @@ namespace UnrealLib::Assets
         }
     }
 
-    void AnimTrack::sample(std::int32_t frame, std::int32_t num_frames, Vec3& position, Quat& rotation) const
+    namespace
     {
-        const auto at = [&](std::size_t keys, std::size_t& i0, std::size_t& i1, float& t) {
+        /// Neighbouring keys @p i0 / @p i1 and blend @p t of frame @p frame among @p keys keys, evenly spaced over
+        /// @p num_frames or at the key frames @p frames.
+        void locate_key(std::size_t keys, const std::vector<float>& frames, std::int32_t frame, std::int32_t num_frames,
+                        std::size_t& i0, std::size_t& i1, float& t)
+        {
             i0 = i1 = 0;
             t = 0;
-            if (keys <= 1 || num_frames <= 1) return;
-            const float pos = static_cast<float>(frame) * static_cast<float>(keys - 1) / static_cast<float>(num_frames - 1);
+            if (keys <= 1) return;
+            const float f = static_cast<float>(frame);
+            if (frames.size() == keys)
+            {
+                const auto next = std::upper_bound(frames.begin(), frames.end(), f);
+                if (next == frames.begin()) return;
+                if (next == frames.end())
+                {
+                    i0 = i1 = keys - 1;
+                    return;
+                }
+                i1 = static_cast<std::size_t>(next - frames.begin());
+                i0 = i1 - 1;
+                const float span = frames[i1] - frames[i0];
+                t = span > 0 ? (f - frames[i0]) / span : 0.0f;
+                return;
+            }
+            if (num_frames <= 1) return;
+            const float pos = f * static_cast<float>(keys - 1) / static_cast<float>(num_frames - 1);
             i0 = std::min(keys - 1, static_cast<std::size_t>(pos));
             i1 = std::min(keys - 1, i0 + 1);
             t = pos - static_cast<float>(i0);
-        };
+        }
+    }
+
+    void AnimTrack::sample(std::int32_t frame, std::int32_t num_frames, Vec3& position, Quat& rotation) const
+    {
         std::size_t i0 = 0, i1 = 0;
         float t = 0;
         position = {};
         rotation = {};
         if (!positions.empty())
         {
-            at(positions.size(), i0, i1, t);
+            locate_key(positions.size(), position_frames, frame, num_frames, i0, i1, t);
             const Vec3& a = positions[i0];
             const Vec3& b = positions[i1];
             position = {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
         }
         if (!rotations.empty())
         {
-            at(rotations.size(), i0, i1, t);
+            locate_key(rotations.size(), rotation_frames, frame, num_frames, i0, i1, t);
             rotation = t == 0 ? rotations[i0] : nlerp(rotations[i0], rotations[i1], t);
         }
     }
@@ -169,30 +195,245 @@ namespace UnrealLib::Assets
         return sequence_length > 0 ? static_cast<float>(num_frames) / sequence_length * rate_scale : 30.0f;
     }
 
+    namespace
+    {
+        // Key codecs (AnimationCompressionFormat). Layouts follow UE Viewer (UnAnim3.cpp / UnMathTools.h).
+
+        /// Mins/ranges of an IntervalFixed32NoW track.
+        struct KeyBounds
+        {
+            Vec3 mins{};
+            Vec3 ranges{};
+        };
+
+        float fixed11(std::uint32_t v) noexcept { return static_cast<float>(v) / 1023.0f - 1.0f; }
+        float fixed10(std::uint32_t v) noexcept { return static_cast<float>(v) / 511.0f - 1.0f; }
+
+        /// Per-track Fixed48 component: 16 bits around 32767, scaled by 2^log2.
+        float fixed16(std::uint16_t v, int log2) noexcept
+        {
+            return (static_cast<float>(v) - 32767.0f) / 32767.0f * static_cast<float>(1 << log2);
+        }
+
+        /// One component of FQuatFloat32NoW: sign, 3-bit exponent (bias 123) and @p mantissa_bits mantissa bits.
+        float packed_float(std::uint32_t v, int mantissa_bits) noexcept
+        {
+            const std::uint32_t mantissa = v & ((1u << mantissa_bits) - 1);
+            const std::uint32_t exponent = ((v >> mantissa_bits) & 7u) + 123u;
+            const std::uint32_t sign = (v >> (mantissa_bits + 3)) & 1u;
+            return std::bit_cast<float>(sign << 31 | exponent << 23 | mantissa << (23 - mantissa_bits));
+        }
+
+        /// Component mask of a key: bit 0 X, bit 1 Y, bit 2 Z. Zero means all three (UE3 writes uncompressed
+        /// tracks with an empty mask).
+        unsigned effective_mask(unsigned mask) noexcept { return (mask & 7u) == 0 ? 7u : (mask & 7u); }
+
+        Vec3 read_vector_key(BinaryReader& r, AnimCompression format, unsigned mask, const KeyBounds& bounds)
+        {
+            switch (format)
+            {
+                case AnimCompression::None:
+                case AnimCompression::Float96NoW:
+                {
+                    Vec3 v{};
+                    mask = effective_mask(mask);
+                    if (mask & 1u) v.x = r.read_f32();
+                    if (mask & 2u) v.y = r.read_f32();
+                    if (mask & 4u) v.z = r.read_f32();
+                    return v;
+                }
+                case AnimCompression::Fixed48NoW:
+                {
+                    Vec3 v{};
+                    mask = effective_mask(mask);
+                    if (mask & 1u) v.x = fixed16(r.read_u16(), 7);
+                    if (mask & 2u) v.y = fixed16(r.read_u16(), 7);
+                    if (mask & 4u) v.z = fixed16(r.read_u16(), 7);
+                    return v;
+                }
+                case AnimCompression::IntervalFixed32NoW:
+                {
+                    const std::uint32_t v = r.read_u32(); // X:10, Y:11, Z:11 (low to high)
+                    return {fixed10(v & 0x3FF) * bounds.ranges.x + bounds.mins.x,
+                            fixed11((v >> 10) & 0x7FF) * bounds.ranges.y + bounds.mins.y,
+                            fixed11(v >> 21) * bounds.ranges.z + bounds.mins.z};
+                }
+                case AnimCompression::Identity:
+                    return {};
+                default:
+                    throw UnsupportedError(fmt::format("translation codec {} is not supported",
+                                                       static_cast<int>(format)));
+            }
+        }
+
+        Quat read_quat_key(BinaryReader& r, AnimCompression format, unsigned mask, const KeyBounds& bounds)
+        {
+            switch (format)
+            {
+                case AnimCompression::None:
+                    return read_quat(r);
+                case AnimCompression::Float96NoW:
+                {
+                    float c[3]{};
+                    mask = effective_mask(mask);
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        if (mask & (1u << i)) c[i] = r.read_f32();
+                    }
+                    return restore_w(c[0], c[1], c[2]);
+                }
+                case AnimCompression::Fixed48NoW:
+                {
+                    float c[3]{};
+                    mask = effective_mask(mask);
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        if (mask & (1u << i)) c[i] = fixed16(r.read_u16(), 0);
+                    }
+                    return restore_w(c[0], c[1], c[2]);
+                }
+                case AnimCompression::IntervalFixed32NoW:
+                {
+                    const std::uint32_t v = r.read_u32(); // Z:10, Y:11, X:11 (low to high)
+                    return restore_w(fixed11(v >> 21) * bounds.ranges.x + bounds.mins.x,
+                                     fixed11((v >> 10) & 0x7FF) * bounds.ranges.y + bounds.mins.y,
+                                     fixed10(v & 0x3FF) * bounds.ranges.z + bounds.mins.z);
+                }
+                case AnimCompression::Fixed32NoW:
+                {
+                    const std::uint32_t v = r.read_u32(); // Z:10, Y:11, X:11 (low to high)
+                    return restore_w(fixed11(v >> 21), fixed11((v >> 10) & 0x7FF), fixed10(v & 0x3FF));
+                }
+                case AnimCompression::Float32NoW:
+                {
+                    const std::uint32_t v = r.read_u32(); // Z:10, Y:11, X:11 (low to high)
+                    return restore_w(packed_float(v >> 21, 7), packed_float((v >> 10) & 0x7FF, 7),
+                                     packed_float(v & 0x3FF, 6));
+                }
+                case AnimCompression::Identity:
+                    return {};
+                default:
+                    throw UnsupportedError(fmt::format("rotation codec {} is not supported", static_cast<int>(format)));
+            }
+        }
+
+        void skip_padding(BinaryReader& r)
+        {
+            r.seek(std::min(align4(r.position()), r.size()));
+        }
+
+        /// Frame table of a variable-key track: one byte per key below 256 frames, else uint16; padded to 4 bytes.
+        void read_key_frames(BinaryReader& r, std::size_t keys, std::int32_t num_frames, std::vector<float>& out)
+        {
+            if (keys <= 1) return;
+            out.reserve(std::min<std::size_t>(keys, r.remaining()));
+            for (std::size_t k = 0; k < keys; ++k)
+            {
+                out.push_back(num_frames < 256 ? static_cast<float>(r.read_u8()) : static_cast<float>(r.read_u16()));
+            }
+            skip_padding(r);
+        }
+
+        /// Keys of a ConstantKeyLerp/VariableKeyLerp track (key count from CompressedTrackOffsets).
+        template <typename Key, typename Read>
+        void read_keys(BinaryReader& r, std::size_t keys, std::vector<Key>& out, Read read)
+        {
+            out.reserve(std::min<std::size_t>(keys, r.remaining()));
+            for (std::size_t k = 0; k < keys; ++k) out.push_back(read());
+        }
+
+        bool is_codec(AnimCompression format) noexcept
+        {
+            return format <= AnimCompression::Identity;
+        }
+    }
+
     void decode_anim_tracks(AnimSequence& seq, bool ranges_before_rotations)
     {
-        if (seq.key_format != AnimKeyFormat::ConstantKeyLerp)
+        const AnimKeyFormat key_format = seq.key_format;
+        if (key_format != AnimKeyFormat::ConstantKeyLerp && key_format != AnimKeyFormat::VariableKeyLerp &&
+            key_format != AnimKeyFormat::PerTrackCompression)
         {
-            throw UnsupportedError("only AKF_ConstantKeyLerp animations are supported");
+            throw UnsupportedError("unknown AnimationKeyFormat");
         }
-        if (seq.track_offsets.size() % 4 != 0)
+        const bool per_track = key_format == AnimKeyFormat::PerTrackCompression;
+        const std::size_t stride = per_track ? 2 : 4;
+        if (seq.track_offsets.size() % stride != 0)
         {
-            throw SerializationError(fmt::format("CompressedTrackOffsets has {} entries, not a multiple of 4",
-                                                 seq.track_offsets.size()));
+            throw SerializationError(fmt::format("CompressedTrackOffsets has {} entries, not a multiple of {}",
+                                                 seq.track_offsets.size(), stride));
         }
         BinaryReader r(std::as_bytes(std::span<const std::uint8_t>(seq.stream)));
-        seq.tracks.assign(seq.track_offsets.size() / 4, AnimTrack{});
+        seq.tracks.assign(seq.track_offsets.size() / stride, AnimTrack{});
         seq.stream_bytes_used = 0;
-        const auto check_offset = [&](std::int32_t offset, const char* what) {
+        const auto seek_to = [&](std::int32_t offset, const char* what) {
             if (offset < 0 || static_cast<std::size_t>(offset) > seq.stream.size())
             {
                 throw SerializationError(fmt::format("{} offset {} outside the {}-byte stream", what, offset,
                                                      seq.stream.size()));
             }
+            r.seek(static_cast<std::size_t>(offset));
         };
+        const auto track_done = [&] { seq.stream_bytes_used = std::max(seq.stream_bytes_used, align4(r.position())); };
+
         for (std::size_t t = 0; t < seq.tracks.size(); ++t)
         {
             AnimTrack& track = seq.tracks[t];
+            if (per_track)
+            {
+                for (int channel = 0; channel < 2; ++channel)
+                {
+                    const bool translation = channel == 0;
+                    const std::int32_t offset = seq.track_offsets[t * 2 + static_cast<std::size_t>(channel)];
+                    if (offset == -1) // identity track
+                    {
+                        if (translation) track.positions.push_back({});
+                        else track.rotations.push_back({});
+                        continue;
+                    }
+                    seek_to(offset, translation ? "translation" : "rotation");
+                    const std::uint32_t header = r.read_u32();
+                    const auto format = static_cast<AnimCompression>(header >> 28);
+                    const unsigned flags = (header >> 24) & 0xFu;
+                    const std::size_t keys = header & 0xFFFFFFu;
+                    if (!is_codec(format))
+                    {
+                        throw UnsupportedError(fmt::format("per-track codec {} is not supported", header >> 28));
+                    }
+                    KeyBounds bounds;
+                    if (format == AnimCompression::IntervalFixed32NoW)
+                    {
+                        float* mins[3] = {&bounds.mins.x, &bounds.mins.y, &bounds.mins.z};
+                        float* ranges[3] = {&bounds.ranges.x, &bounds.ranges.y, &bounds.ranges.z};
+                        for (int i = 0; i < 3; ++i)
+                        {
+                            if (flags & (1u << i))
+                            {
+                                *mins[i] = r.read_f32();
+                                *ranges[i] = r.read_f32();
+                            }
+                        }
+                    }
+                    if (translation)
+                    {
+                        read_keys(r, keys, track.positions, [&] { return read_vector_key(r, format, flags, bounds); });
+                    }
+                    else
+                    {
+                        read_keys(r, keys, track.rotations, [&] { return read_quat_key(r, format, flags, bounds); });
+                    }
+                    skip_padding(r);
+                    if (flags & 8u)
+                    {
+                        read_key_frames(r, keys, seq.num_frames,
+                                        translation ? track.position_frames : track.rotation_frames);
+                    }
+                    track_done();
+                }
+                continue;
+            }
+
+            const bool variable = key_format == AnimKeyFormat::VariableKeyLerp;
             const std::int32_t trans_offset = seq.track_offsets[t * 4];
             const std::int32_t trans_keys = seq.track_offsets[t * 4 + 1];
             const std::int32_t rot_offset = seq.track_offsets[t * 4 + 2];
@@ -203,77 +444,36 @@ namespace UnrealLib::Assets
             }
             if (trans_keys > 0)
             {
-                check_offset(trans_offset, "translation");
-                r.seek(static_cast<std::size_t>(trans_offset));
+                seek_to(trans_offset, "translation");
                 const AnimCompression format = trans_keys == 1 ? AnimCompression::None : seq.translation_format;
-                for (std::int32_t k = 0; k < trans_keys; ++k)
+                KeyBounds bounds;
+                if (format == AnimCompression::IntervalFixed32NoW)
                 {
-                    switch (format)
-                    {
-                        case AnimCompression::None:
-                        case AnimCompression::Float96NoW:
-                            track.positions.push_back(read_vec3(r));
-                            break;
-                        case AnimCompression::Identity:
-                            track.positions.push_back({});
-                            break;
-                        default:
-                            throw UnsupportedError("unsupported translation compression");
-                    }
+                    bounds.mins = read_vec3(r);
+                    bounds.ranges = read_vec3(r);
                 }
-                seq.stream_bytes_used = std::max(seq.stream_bytes_used, align4(r.position()));
+                read_keys(r, static_cast<std::size_t>(trans_keys), track.positions,
+                          [&] { return read_vector_key(r, format, 7, bounds); });
+                skip_padding(r);
+                if (variable) read_key_frames(r, track.positions.size(), seq.num_frames, track.position_frames);
+                track_done();
             }
             if (rot_keys > 0)
             {
-                check_offset(rot_offset, "rotation");
-                r.seek(static_cast<std::size_t>(rot_offset));
-                AnimCompression format = seq.rotation_format;
-                if (rot_keys == 1)
+                seek_to(rot_offset, "rotation");
+                // A single key is stored uncompressed.
+                const AnimCompression format = rot_keys == 1 ? AnimCompression::Float96NoW : seq.rotation_format;
+                KeyBounds bounds;
+                if (rot_keys > 1 && (ranges_before_rotations || format == AnimCompression::IntervalFixed32NoW))
                 {
-                    format = AnimCompression::Float96NoW; // a single key is stored uncompressed
+                    bounds.mins = read_vec3(r);
+                    bounds.ranges = read_vec3(r);
                 }
-                else if (ranges_before_rotations || format == AnimCompression::IntervalFixed32NoW)
-                {
-                    (void)read_vec3(r); // mins (unused by these codecs)
-                    (void)read_vec3(r); // ranges
-                }
-                for (std::int32_t k = 0; k < rot_keys; ++k)
-                {
-                    switch (format)
-                    {
-                        case AnimCompression::None:
-                            track.rotations.push_back(read_quat(r));
-                            break;
-                        case AnimCompression::Float96NoW:
-                        {
-                            const float x = r.read_f32(), y = r.read_f32(), z = r.read_f32();
-                            track.rotations.push_back(restore_w(x, y, z));
-                            break;
-                        }
-                        case AnimCompression::Fixed48NoW:
-                        {
-                            const auto c = [&] { return (static_cast<float>(r.read_u16()) - 32767.0f) / 32767.0f; };
-                            const float x = c(), y = c(), z = c();
-                            track.rotations.push_back(restore_w(x, y, z));
-                            break;
-                        }
-                        case AnimCompression::Fixed32NoW:
-                        {
-                            const std::uint32_t v = r.read_u32(); // Z:10, Y:11, X:11 (low to high)
-                            const float z = static_cast<float>(v & 0x3FF) / 511.0f - 1.0f;
-                            const float y = static_cast<float>((v >> 10) & 0x7FF) / 1023.0f - 1.0f;
-                            const float x = static_cast<float>((v >> 21) & 0x7FF) / 1023.0f - 1.0f;
-                            track.rotations.push_back(restore_w(x, y, z));
-                            break;
-                        }
-                        case AnimCompression::Identity:
-                            track.rotations.push_back({});
-                            break;
-                        default:
-                            throw UnsupportedError("unsupported rotation compression");
-                    }
-                }
-                seq.stream_bytes_used = std::max(seq.stream_bytes_used, align4(r.position()));
+                read_keys(r, static_cast<std::size_t>(rot_keys), track.rotations,
+                          [&] { return read_quat_key(r, format, 7, bounds); });
+                skip_padding(r);
+                if (variable) read_key_frames(r, track.rotations.size(), seq.num_frames, track.rotation_frames);
+                track_done();
             }
         }
     }
@@ -288,7 +488,7 @@ namespace UnrealLib::Assets
         }
         BinaryReader r = source.native_reader();
         const std::uint16_t version = r.context().file_version;
-        if (version < 372 || version >= 577)
+        if (version < 372)
         {
             throw UnsupportedError(fmt::format("AnimSequence layout of file version {} is not supported", version));
         }
@@ -305,6 +505,30 @@ namespace UnrealLib::Assets
             anim_compression_from_name(p.get_name("TranslationCompressionFormat").value_or("ACF_None"));
         seq.rotation_format = anim_compression_from_name(p.get_name("RotationCompressionFormat").value_or("ACF_None"));
         seq.track_offsets = int_array(p, "CompressedTrackOffsets");
+
+        if (version >= 577) // RawAnimData: TArray<FRawAnimSequenceTrack>, key arrays bulk-serialized
+        {
+            const std::uint32_t tracks = r.read_array_count(16);
+            seq.raw_tracks.resize(tracks);
+            const auto bulk_count = [&](std::int32_t element_size, const char* what) {
+                const std::int32_t stored = r.read_i32();
+                if (stored != element_size)
+                {
+                    throw SerializationError(fmt::format("RawAnimData {} keys of {} bytes, expected {}", what, stored,
+                                                         element_size));
+                }
+                return r.read_array_count(static_cast<std::size_t>(element_size));
+            };
+            for (AnimTrack& track : seq.raw_tracks)
+            {
+                const std::uint32_t positions = bulk_count(12, "position");
+                track.positions.reserve(positions);
+                for (std::uint32_t k = 0; k < positions; ++k) track.positions.push_back(read_vec3(r));
+                const std::uint32_t rotations = bulk_count(16, "rotation");
+                track.rotations.reserve(rotations);
+                for (std::uint32_t k = 0; k < rotations; ++k) track.rotations.push_back(read_quat(r));
+            }
+        }
 
         const std::uint32_t size = r.read_array_count(1);
         const auto bytes = r.read_view(size);

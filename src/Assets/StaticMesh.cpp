@@ -38,6 +38,9 @@ namespace UnrealLib::Assets
 
     namespace
     {
+        /// First file version with the late UE3 StaticMesh layout UnrealLib reads (see StaticMesh).
+        constexpr std::uint16_t late_static_mesh_version = 868;
+
         StaticMeshSection read_section(BinaryReader& r, std::uint16_t version)
         {
             StaticMeshSection s;
@@ -62,7 +65,12 @@ namespace UnrealLib::Assets
             }
             if (version >= 618)
             {
-                throw UnsupportedError("StaticMesh sections of file version >= 618 are not supported");
+                // Platform data flag (zero in PC packages; a non-zero value would be followed by console data).
+                const std::uint8_t flag = r.read_u8();
+                if (flag != 0)
+                {
+                    throw UnsupportedError(fmt::format("StaticMesh section platform data (flag {}) is not supported", flag));
+                }
             }
             return s;
         }
@@ -139,9 +147,23 @@ namespace UnrealLib::Assets
                     }
                 }
             }
-            if (version >= 615)
+            if (version >= 615) // color stream: item size, vertex count, then the colors only if there are any
             {
-                throw UnsupportedError("StaticMesh color streams (file version >= 615) are not supported");
+                const std::int32_t color_size = r.read_i32();
+                const std::int32_t color_vertices = r.read_i32();
+                if (color_vertices != 0)
+                {
+                    const BulkArrayHeader colors = read_bulk_array_header(r, 4, "StaticMesh color stream");
+                    if (color_size != 4 || color_vertices != static_cast<std::int32_t>(colors.count) ||
+                        colors.count != positions.count)
+                    {
+                        throw SerializationError(fmt::format("StaticMesh color stream: item size {}, {} vertices, {} "
+                                                             "stored, {} positions",
+                                                             color_size, color_vertices, colors.count, positions.count));
+                    }
+                    lod.colors.reserve(colors.count);
+                    for (std::uint32_t i = 0; i < colors.count; ++i) lod.colors.push_back(read_color(r));
+                }
             }
             if (version < 686)
             {
@@ -154,6 +176,10 @@ namespace UnrealLib::Assets
             lod.num_vertices = r.read_i32();
             lod.indices = read_index_buffer(r, "StaticMesh indices");
             lod.wireframe_indices = read_index_buffer(r, "StaticMesh wireframe indices");
+            if (version >= late_static_mesh_version)
+            {
+                lod.adjacency_indices = read_index_buffer(r, "StaticMesh adjacency indices");
+            }
             if (version < 686)
             {
                 const BulkArrayHeader edges = read_bulk_array_header(r, 16, "StaticMesh edges");
@@ -193,17 +219,21 @@ namespace UnrealLib::Assets
         }
         BinaryReader r = source.native_reader();
         const std::uint16_t version = r.context().file_version;
-        if (version < 472 || version >= 770)
+        // Versions 770..867 changed the layout step by step; only the endpoints are verified.
+        if (version < 472 || (version >= 770 && version < late_static_mesh_version))
         {
             throw UnsupportedError(fmt::format("StaticMesh layout of file version {} is not supported", version));
         }
+        const bool late = version >= late_static_mesh_version;
         StaticMesh mesh;
         mesh.name = object.package->object_name(object.index);
         mesh.bounds = read_bounds(r);
         mesh.body_setup = ObjectIndex{r.read_i32()};
-        const BulkArrayHeader nodes = read_bulk_array_header(r, 32, "StaticMesh kDOP nodes");
+        if (late) (void)r.read_view(24); // compact kDOP tree: bounding box (recomputable from the nodes)
+        const std::uint32_t node_size = late ? 6u : 32u;
+        const BulkArrayHeader nodes = read_bulk_array_header(r, node_size, "StaticMesh kDOP nodes");
         mesh.kdop_node_count = static_cast<std::int32_t>(nodes.count);
-        (void)r.read_view(static_cast<std::size_t>(nodes.count) * 32);
+        (void)r.read_view(static_cast<std::size_t>(nodes.count) * node_size);
         const BulkArrayHeader triangles = read_bulk_array_header(r, 8, "StaticMesh kDOP triangles");
         mesh.kdop_triangle_count = static_cast<std::int32_t>(triangles.count);
         (void)r.read_view(static_cast<std::size_t>(triangles.count) * 8);
@@ -217,10 +247,34 @@ namespace UnrealLib::Assets
                 mesh.content_tags.push_back(object.package->names().to_string(name));
             }
         }
+        if (late)
+        {
+            // Source data, optimization settings, bHasBeenSimplified, bIsMeshProxy: all empty when cooked.
+            for (const char* what : {"source data", "optimization settings", "simplification", "mesh proxy"})
+            {
+                if (const std::int32_t v = r.read_i32(); v != 0)
+                {
+                    throw UnsupportedError(fmt::format("StaticMesh {} ({}) is not supported", what, v));
+                }
+            }
+        }
         const std::uint32_t lods = r.read_array_count(64);
         for (std::uint32_t i = 0; i < lods; ++i) mesh.lods.push_back(read_lod(r, version));
+        if (late) mesh.late_leading_value = r.read_i32();
         for (auto& a : mesh.thumbnail_angle) a = r.read_i32();
         mesh.thumbnail_distance = r.read_f32();
+        if (late)
+        {
+            mesh.high_res_source_mesh_name = r.read_string();
+            mesh.high_res_source_mesh_crc = r.read_u32();
+            mesh.lighting_guid = r.read_guid();
+            mesh.vertex_position_version = r.read_i32();
+            const std::uint32_t factors = r.read_array_count(4);
+            mesh.streaming_texture_factors.reserve(factors);
+            for (std::uint32_t i = 0; i < factors; ++i) mesh.streaming_texture_factors.push_back(r.read_f32());
+            mesh.remove_degenerates = r.read_bool32();
+            for (auto& v : mesh.late_trailer) v = r.read_i32();
+        }
         if (object.package->profile().assets.static_mesh_trailing_float)
         {
             mesh.trailing_float = r.read_f32();
