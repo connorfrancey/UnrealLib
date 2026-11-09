@@ -11,7 +11,7 @@ cmake_minimum_required(VERSION 3.25)
 project(UnrealLib
         VERSION 0.1.0
         DESCRIPTION "Native C++20 Unreal Engine 3 package library"
-        HOMEPAGE_URL "https://github.com/EliotVU/Unreal-Library"
+        HOMEPAGE_URL "https://github.com/connorfrancey/UnrealLib"
         LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" "${PROJECT_SOURCE_DIR}/cmake/modules")

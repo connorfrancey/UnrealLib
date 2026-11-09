@@ -78,14 +78,15 @@ Presets: `msvc-x64-debug`, `msvc-x64-release`, `msvc-x86-debug`, `msvc-x86-relea
 ```cmake
 CPMAddPackage(
     NAME UnrealLib
-    GIT_REPOSITORY <url-of-this-repository>
+    GIT_REPOSITORY https://github.com/connorfrancey/UnrealLib.git
     GIT_TAG <commit-or-tag>)
 target_link_libraries(my_app PRIVATE UnrealLib::UnrealLib)
 ```
 
 As a subproject, tests/tools/examples/ccache default to OFF and only fmt, spdlog and zlib are requested. Dependencies
 are added with CPM by name, so a parent that already added `fmt`, `spdlog` or `zlib` through CPM shares its copy
-(make sure the versions are compatible: see `cmake/Versions.cmake`). `add_subdirectory()` works the same way.
+(make sure the versions are compatible: see `cmake/Versions.cmake`). `add_subdirectory()` works the same way. Both are
+covered by the `Subproject.CPM` and `Subproject.AddSubdirectory` tests.
 
 ### Installing and `find_package(UnrealLib)`
 
@@ -151,6 +152,7 @@ GoogleTest is the test framework (with GoogleMock available); tests are discover
 | `tests/Differential` | UnrealLib vs. upstream C# UELib (opt-in, needs the .NET SDK) |
 | `tests/Reference` | normalized corpus metadata (`mirrorsedge-pc.tsv`): regression baseline for every package's summary and tables (`FullCorpusMatchesReference`, sweep) |
 | `tests/Install` | `Install.Consumer`: install + `find_package(UnrealLib)` from a separate project |
+| `tests/Subproject` | `Subproject.CPM` / `Subproject.AddSubdirectory`: a separate project builds UnrealLib from source (CPM reuses the parent's fmt; no development targets or dependencies) |
 
 Fixture tests:
 

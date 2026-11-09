@@ -162,6 +162,30 @@ if (UNREALLIB_INSTALL)
 endif ()
 
 # ----------------------------------------------------------------------------------------------------------------------
+# Subproject smoke tests: a separate project builds UnrealLib from this source tree with CPMAddPackage and with
+# add_subdirectory (tests/Subproject/Consumer).
+# ----------------------------------------------------------------------------------------------------------------------
+foreach (_mode IN ITEMS CPM SUBDIRECTORY)
+    if (_mode STREQUAL "CPM")
+        set(_name Subproject.CPM)
+    else ()
+        set(_name Subproject.AddSubdirectory)
+    endif ()
+    add_test(NAME ${_name}
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DMODE=${_mode}"
+                     "-DUNREALLIB_SOURCE=${PROJECT_SOURCE_DIR}"
+                     "-DCONFIG=$<CONFIG>"
+                     "-DWORK_DIR=${PROJECT_BINARY_DIR}/subproject-test/${_mode}"
+                     "-DGENERATOR=${CMAKE_GENERATOR}"
+                     "-DC_COMPILER=${CMAKE_C_COMPILER}"
+                     "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                     "-DEXPECTED_VERSION=${PROJECT_VERSION}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/Subproject/RunSubprojectTest.cmake")
+    set_tests_properties(${_name} PROPERTIES LABELS "subproject" TIMEOUT 900)
+endforeach ()
+
+# ----------------------------------------------------------------------------------------------------------------------
 # Public header self-containment: every header under include/UnrealLib compiles on its own (and twice, so include
 # guards / #pragma once work). The glob is deliberate here — the check must cover headers added later — and is not
 # used for library sources.

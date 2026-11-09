@@ -78,14 +78,74 @@ auto diagnostics = UnrealLib::validate_package(package);
 
 ### Using it from another CMake project (CPM.cmake)
 
+UnrealLib can be added to another project with [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) and built
+from source as part of that project's build. It needs CMake 3.25 or newer and a C++20 compiler.
+
+A complete consumer `CMakeLists.txt`:
+
 ```cmake
-CPMAddPackage(NAME UnrealLib GIT_REPOSITORY <url> GIT_TAG <tag>)
+cmake_minimum_required(VERSION 3.25)
+project(MyTool LANGUAGES CXX)
+
+# Get CPM.cmake (or copy cmake/CPM.cmake from a CPM release into your project and include that).
+file(DOWNLOAD
+     https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.43.2/CPM.cmake
+     ${CMAKE_BINARY_DIR}/cmake/CPM.cmake)
+include(${CMAKE_BINARY_DIR}/cmake/CPM.cmake)
+
+CPMAddPackage(
+    NAME UnrealLib
+    GITHUB_REPOSITORY connorfrancey/UnrealLib
+    GIT_TAG <commit-or-tag>)          # pin a commit hash or release tag
+
+add_executable(my_tool main.cpp)
+target_compile_features(my_tool PRIVATE cxx_std_20)
 target_link_libraries(my_tool PRIVATE UnrealLib::UnrealLib)
 ```
 
-Tests, tools and examples are off by default for consumers; only fmt, spdlog and zlib are pulled in.
+The shorthand form works too: `CPMAddPackage("gh:connorfrancey/UnrealLib#<commit-or-tag>")`.
 
-Or install it and use the exported package:
+**Targets.** `UnrealLib::UnrealLib` links the whole library. Each module is also its own target, so you can link
+only what you use: `UnrealLib::Core`, `Utilities`, `Serialization`, `Names`, `Package`, `Objects`, `Properties`,
+`Bytecode`, `Reflection`, `Linker`, `Decompiler`, `Assets`, `Writer`, `T3D` (each pulls in the modules it
+depends on).
+
+**What gets built.** When UnrealLib is not the top-level project, its tests, tools, examples, install rules and
+ccache integration are off, and only its runtime dependencies (fmt, spdlog, zlib) are fetched. Turn individual
+parts back on through `OPTIONS`:
+
+```cmake
+CPMAddPackage(
+    NAME UnrealLib
+    GITHUB_REPOSITORY connorfrancey/UnrealLib
+    GIT_TAG <commit-or-tag>
+    OPTIONS
+        "UNREALLIB_BUILD_TOOLS ON"    # command-line tools (also fetches CLI11 and nlohmann_json)
+        "UNREALLIB_INSTALL ON")       # install UnrealLib (and fmt, spdlog, zlib) with your project
+```
+
+**Shared dependencies.** UnrealLib adds fmt, spdlog and zlib through CPM by name. If your project adds any of them
+with `CPMAddPackage` *before* UnrealLib, UnrealLib uses your copy instead of fetching another; keep the versions
+compatible with [cmake/Versions.cmake](cmake/Versions.cmake). spdlog is configured to use the external fmt
+(`SPDLOG_FMT_EXTERNAL`).
+
+**Useful CPM settings.**
+
+* `CPM_SOURCE_CACHE` (environment or cache variable): share downloaded sources between build trees instead of
+  fetching them again for every build directory.
+* `-DCPM_UnrealLib_SOURCE=<path to a local checkout>`: build against a local UnrealLib checkout without changing
+  your `CMakeLists.txt` (handy while working on both).
+* `CPM_USE_LOCAL_PACKAGES=ON`: try `find_package` first for every dependency (for example an installed UnrealLib or
+  system fmt/spdlog/zlib).
+
+**Without CPM.** A plain `add_subdirectory(<path to UnrealLib>)` behaves the same way (UnrealLib bootstraps its own
+pinned CPM.cmake to fetch its dependencies).
+
+Both routes are tested by `Subproject.CPM` and `Subproject.AddSubdirectory` (see [tests/Subproject](tests/Subproject)).
+
+### Installing and `find_package`
+
+Instead of building from source, you can install UnrealLib once and use the exported package:
 
 ```sh
 cmake --install build/msvc-x64-release --prefix <prefix>
