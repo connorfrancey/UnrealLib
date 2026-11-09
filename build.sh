@@ -5,7 +5,7 @@
 #   ./build.sh all             configure + build + test the default preset
 #   ./build.sh --help          all commands
 #
-# Runs scripts/manage.py with uv; all arguments are passed through unchanged and the working directory is kept,
+# Runs uelib.py with uv; all arguments are passed through unchanged and the working directory is kept,
 # so relative paths (e.g. `./build.sh tool inspector Core.u`) refer to where you are.
 set -eu
 
@@ -18,4 +18,4 @@ if ! command -v uv >/dev/null 2>&1; then
     exit 127
 fi
 
-exec uv run --script "$script_dir/scripts/manage.py" "$@"
+exec uv run --script "$script_dir/uelib.py" "$@"

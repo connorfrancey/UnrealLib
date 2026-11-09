@@ -1,6 +1,6 @@
 # ----------------------------------------------------------------------------------------------------------------------
 # UnrealLib modules. Dependency order (no cycles):
-#   Core -> Utilities -> Serialization -> Names -> Package -> Objects -> Linker
+#   Core -> Utilities -> Serialization -> Names -> Package -> Objects, Properties -> Linker -> Decompiler, Assets; Package, Properties -> Writer; Assets, Linker, Writer -> T3D
 # Sources are listed explicitly; add new files here when a module grows.
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -62,16 +62,88 @@ unreallib_add_module(Objects
         PUBLIC_DEPS
             UnrealLib::Package)
 
+unreallib_add_module(Properties
+        SOURCES
+            Properties/PropertyTag.cpp
+            Properties/PropertyText.cpp
+            Properties/PropertyValue.cpp
+        PUBLIC_DEPS
+            UnrealLib::Package)
+
+unreallib_add_module(Bytecode
+        SOURCES
+            Bytecode/Bytecode.cpp
+        PUBLIC_DEPS
+            UnrealLib::Package)
+
+unreallib_add_module(Reflection
+        SOURCES
+            Reflection/Fields.cpp
+        PUBLIC_DEPS
+            UnrealLib::Objects
+            UnrealLib::Properties
+            UnrealLib::Bytecode)
+
 unreallib_add_module(Linker
         SOURCES
             Linker/Linker.cpp
+            Linker/ReflectionSchema.cpp
         PUBLIC_DEPS
             UnrealLib::Objects
-            UnrealLib::Package)
+            UnrealLib::Package
+            UnrealLib::Properties
+            UnrealLib::Reflection)
+
+unreallib_add_module(Decompiler
+        SOURCES
+            Decompiler/ClassDecompiler.cpp
+            Decompiler/Decompiler.cpp
+            Decompiler/NativeTable.cpp
+            Decompiler/Printer.cpp
+            Decompiler/Printer.hpp
+            Decompiler/Statements.cpp
+        PUBLIC_DEPS
+            UnrealLib::Bytecode
+            UnrealLib::Linker
+            UnrealLib::Reflection)
+
+unreallib_add_module(Assets
+        SOURCES
+            Assets/Animation.cpp
+            Assets/AssetObject.cpp
+            Assets/Brush.cpp
+            Assets/BulkData.cpp
+            Assets/Image.cpp
+            Assets/Material.cpp
+            Assets/MeshReading.hpp
+            Assets/SkeletalMesh.cpp
+            Assets/Sound.cpp
+            Assets/StaticMesh.cpp
+            Assets/Texture.cpp
+        PUBLIC_DEPS
+            UnrealLib::Linker
+            UnrealLib::Properties)
+
+unreallib_add_module(Writer
+        SOURCES
+            Writer/PackageWriter.cpp
+        PUBLIC_DEPS
+            UnrealLib::Package
+            UnrealLib::Properties)
+
+unreallib_add_module(T3D
+        SOURCES
+            T3D/T3D.cpp
+        PUBLIC_DEPS
+            UnrealLib::Assets
+            UnrealLib::Linker
+            UnrealLib::Properties
+            UnrealLib::Writer)
 
 # Umbrella target: link this to get the whole library.
 add_library(unreallib INTERFACE)
 add_library(UnrealLib::UnrealLib ALIAS unreallib)
+set_target_properties(unreallib PROPERTIES EXPORT_NAME UnrealLib)
 target_link_libraries(unreallib INTERFACE
         UnrealLib::Core
         UnrealLib::Utilities
@@ -79,4 +151,11 @@ target_link_libraries(unreallib INTERFACE
         UnrealLib::Names
         UnrealLib::Package
         UnrealLib::Objects
-        UnrealLib::Linker)
+        UnrealLib::Properties
+        UnrealLib::Bytecode
+        UnrealLib::Reflection
+        UnrealLib::Linker
+        UnrealLib::Decompiler
+        UnrealLib::Assets
+        UnrealLib::Writer
+        UnrealLib::T3D)

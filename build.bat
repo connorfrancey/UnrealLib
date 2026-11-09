@@ -5,7 +5,7 @@ rem   build.bat                 interactive menu
 rem   build.bat all             configure + build + test the default preset
 rem   build.bat --help          all commands
 rem
-rem Runs scripts\manage.py with uv; all arguments are passed through unchanged and the working directory is kept,
+rem Runs uelib.py with uv; all arguments are passed through unchanged and the working directory is kept,
 rem so relative paths (e.g. "build.bat tool inspector Core.u") refer to where you are.
 setlocal
 
@@ -17,5 +17,5 @@ if errorlevel 1 (
     exit /b 127
 )
 
-uv run --script "%~dp0scripts\manage.py" %*
+uv run --script "%~dp0uelib.py" %*
 exit /b %ERRORLEVEL%

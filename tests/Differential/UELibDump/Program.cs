@@ -17,6 +17,7 @@ using System.Text;
 using System.Text.Json;
 using UELib;
 using UELib.Core;
+using UELib.Types;
 
 namespace UnrealLib.Differential;
 
@@ -105,6 +106,81 @@ internal static class Program
         w.WriteStartArray();
         w.WriteNumberValue((int)name);
         w.WriteNumberValue(name.Number + 1); // upstream stores (on-disk number - 1)
+        w.WriteEndArray();
+    }
+
+    // Script packages only (objects of every export are deserialized, which is slow for maps):
+    //   objects: [{ "export": i, "ok": bool, "properties": [{ "name", "type", "size", "index", "struct"?, "bool"? }],
+    //               "script"?: { "storage_size", "tokens": [[memory position, memory size, code]] } }]
+    // code = opcode for expression tokens, 0x10000 + native index for native calls (upstream does not keep the raw
+    // opcode of natives, and its StoragePosition is off by one for two-byte native opcodes, so memory positions are
+    // compared). Tokens are sorted by position.
+    private static void WriteObjects(Utf8JsonWriter w, UnrealPackage package)
+    {
+        package.InitializePackage(UnrealPackage.InitFlags.All);
+        w.WriteStartArray("objects");
+        for (int i = 0; i < package.Exports.Count; ++i)
+        {
+            UObject? obj = package.Exports[i].Object;
+            if (obj == null)
+            {
+                continue;
+            }
+            if (obj.DeserializationState == 0)
+            {
+                try
+                {
+                    obj.Load();
+                }
+                catch (Exception)
+                {
+                    // Reported through DeserializationState below.
+                }
+            }
+            bool ok = !obj.DeserializationState.HasFlag(UObject.ObjectState.Errorlized);
+            w.WriteStartObject();
+            w.WriteNumber("export", i);
+            w.WriteBoolean("ok", ok);
+            w.WriteStartArray("properties");
+            foreach (var p in obj.Properties ?? [])
+            {
+                w.WriteStartObject();
+                w.WritePropertyName("name"); WriteName(w, p.Name);
+                w.WriteString("type", UDefaultProperty.ResolvePropertyTypeName(p.Type));
+                w.WriteNumber("size", p.Size);
+                w.WriteNumber("index", p.ArrayIndex);
+                // StructName shares storage with EnumName/InnerTypeName upstream, so it is only meaningful for structs.
+                if (p.Type == PropertyType.StructProperty && p.StructName is { } structName)
+                {
+                    w.WritePropertyName("struct"); WriteName(w, structName);
+                }
+                if (p.BoolValue is { } boolValue)
+                {
+                    w.WriteBoolean("bool", boolValue);
+                }
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            if (obj is UStruct { ByteCodeManager: { } code } s)
+            {
+                w.WriteStartObject("script");
+                w.WriteNumber("storage_size", s.ScriptSize);
+                w.WriteStartArray("tokens");
+                foreach (var t in (code.DeserializedTokens ?? []).OrderBy(t => t.Position))
+                {
+                    w.WriteStartArray();
+                    w.WriteNumberValue(t.Position);
+                    w.WriteNumberValue(t.Size);
+                    w.WriteNumberValue(t is UStruct.UByteCodeDecompiler.NativeFunctionToken n
+                                           ? 0x10000 + n.NativeItem.ByteToken
+                                           : t.OpCode);
+                    w.WriteEndArray();
+                }
+                w.WriteEndArray();
+                w.WriteEndObject();
+            }
+            w.WriteEndObject();
+        }
         w.WriteEndArray();
     }
 
@@ -244,6 +320,11 @@ internal static class Program
                     w.WriteEndArray();
                 }
                 w.WriteEndArray();
+
+                if (Path.GetExtension(file).Equals(".u", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteObjects(w, package);
+                }
             }
 
             w.WriteEndObject();

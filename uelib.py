@@ -9,13 +9,13 @@
 # [tool.uv]
 # exclude-newer = "2026-10-23T00:00:00Z"
 # ///
-"""UnrealLib project manager.
+"""UnrealLib project manager (uelib.py).
 
 Run with uv (dependencies are installed automatically into a cached, isolated environment):
 
-    uv run scripts/manage.py               # interactive menu
-    uv run scripts/manage.py --help        # all commands
-    uv run scripts/manage.py all msvc-x64-debug
+    uv run uelib.py               # interactive menu
+    uv run uelib.py --help        # all commands
+    uv run uelib.py all msvc-x64-debug
 
 On Windows the Visual C++ environment (vcvarsall) is located with vswhere and applied automatically for the
 architecture of the selected preset, so no Developer Command Prompt is needed.
@@ -43,10 +43,13 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent
 PRESETS_FILE = ROOT / "CMakePresets.json"
-SETTINGS_FILE = ROOT / ".manage.json"
-ENV_CACHE_DIR = ROOT / "build" / ".manage-cache"
+SETTINGS_FILE = ROOT / ".uelib.json"
+LEGACY_SETTINGS_FILE = ROOT / ".manage.json"  # name used before the script was renamed to uelib.py
+ENV_CACHE_DIR = ROOT / "build" / ".uelib-cache"
+TEST_LOG_DIR = ROOT / "build" / "logs"   # <preset>/test-<timestamp>.log|.xml, plus latest.log|.xml
+TEST_LOGS_KEPT = 20                      # Runs kept per preset (older ones are deleted)
 IS_WINDOWS = platform.system() == "Windows"
 
 console = Console(highlight=False)
@@ -78,6 +81,8 @@ SETTING_KEYS = {
 
 
 def load_settings() -> dict[str, Any]:
+    if not SETTINGS_FILE.exists() and LEGACY_SETTINGS_FILE.exists():
+        LEGACY_SETTINGS_FILE.rename(SETTINGS_FILE)
     if SETTINGS_FILE.exists():
         try:
             return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
@@ -203,7 +208,8 @@ def get_preset(name: str | None) -> Preset:
 # ----------------------------------------------------------------------------------------------------------------------
 
 
-VS_MARKER = ".manage-vs"  # written into a build tree: the Visual Studio installation it was configured with
+VS_MARKER = ".uelib-vs"  # written into a build tree: the Visual Studio installation it was configured with
+LEGACY_VS_MARKER = ".manage-vs"  # marker name used by older versions of this script
 
 
 @dataclass
@@ -265,6 +271,8 @@ def select_vs(preset: Preset | None) -> VsInstallation:
 
     if preset is not None:
         marker = preset.binary_dir / VS_MARKER
+        if not marker.exists():
+            marker = preset.binary_dir / LEGACY_VS_MARKER
         if marker.exists() and (found := by_path(Path(marker.read_text(encoding="utf-8").strip()))):
             return found
         if (compiler := _cached_compiler(preset)) and (found := by_path(compiler)):
@@ -406,24 +414,54 @@ def do_build(preset: Preset, targets: tuple[str, ...] = (), clean_first: bool = 
     run(command, env=environment_for(preset))
 
 
+def new_test_log(preset: Preset) -> tuple[Path, Path]:
+    """Paths of a new run's log (CTest console output) and JUnit report (every test's own output)."""
+    directory = TEST_LOG_DIR / preset.name
+    directory.mkdir(parents=True, exist_ok=True)
+    base = directory / time.strftime("test-%Y%m%d-%H%M%S")
+    return base.with_suffix(".log"), base.with_suffix(".xml")
+
+
+def finish_test_log(log: Path, junit: Path) -> None:
+    """Copies the run to latest.log/.xml, deletes runs beyond TEST_LOGS_KEPT and says where the files are."""
+    directory = log.parent
+    for path, latest in ((log, "latest.log"), (junit, "latest.xml")):
+        if path.exists():
+            shutil.copyfile(path, directory / latest)
+    runs = sorted({p.stem for p in directory.glob("test-*.*")})
+    for stem in runs[:-TEST_LOGS_KEPT]:
+        for old in directory.glob(f"{stem}.*"):
+            old.unlink(missing_ok=True)
+    written = [p for p in (log, junit) if p.exists()]
+    if written:
+        console.print("[dim]Test logs: " + ", ".join(str(p.relative_to(ROOT)) for p in written) + "[/]")
+
+
 def do_test(preset: Preset, regex: str | None = None, exclude: str | None = None, jobs: int | None = None,
-            sweep: bool = False, verbose: bool = False, build: bool = True) -> None:
+            sweep: bool = False, verbose: bool = False, build: bool = True, log: bool = True) -> None:
     if build:
         do_build(preset, jobs=jobs)
     else:
         ensure_configured(preset)
     step(f"Test {preset.name}" + (" (full corpus sweep)" if sweep else ""))
-    command = ["ctest", "--preset", preset.name, *jobs_arg(jobs)]
+    command = ["ctest", "--preset", preset.name, "--output-on-failure", *jobs_arg(jobs)]
     if regex:
         command += ["-R", regex]
     if exclude:
         command += ["-E", exclude]
     if verbose:
         command.append("--verbose")
+    if log:
+        log_file, junit_file = new_test_log(preset)
+        command += ["--output-log", str(log_file), "--output-junit", str(junit_file)]
     extra = {"UNREALLIB_FIXTURE_SWEEP": "1"} if sweep else {}
     if fixtures := fixture_dir():
         extra["UNREALLIB_MIRRORSEDGE_DIR"] = fixtures
-    run(command, env=environment_for(preset, extra))
+    try:
+        run(command, env=environment_for(preset, extra))
+    finally:   # Failed runs are the ones whose logs matter most
+        if log:
+            finish_test_log(log_file, junit_file)
 
 
 def do_clean(presets: list[Preset], assume_yes: bool = False) -> None:
@@ -612,11 +650,13 @@ def build(preset: str | None, targets: tuple[str, ...], clean_first: bool, jobs:
 @click.option("--sweep", is_flag=True, help="Enable the full Mirror's Edge corpus sweeps (slow).")
 @click.option("--no-build", is_flag=True, help="Do not build before testing.")
 @click.option("-v", "--verbose", is_flag=True, help="Show test output.")
+@click.option("--log/--no-log", default=True, show_default=True,
+              help="Write build/logs/<preset>/test-<time>.log (console output) and .xml (JUnit: every test's output).")
 @jobs_option
 def test(preset: str | None, regex: str | None, exclude: str | None, sweep: bool, no_build: bool, verbose: bool,
-         jobs: int | None) -> None:
+         log: bool, jobs: int | None) -> None:
     """Build and run the tests of PRESET with CTest."""
-    do_test(get_preset(preset), regex, exclude, jobs, sweep, verbose, build=not no_build)
+    do_test(get_preset(preset), regex, exclude, jobs, sweep, verbose, build=not no_build, log=log)
 
 
 @cli.command("all")
@@ -664,7 +704,7 @@ def docs(preset: str | None, open_browser: bool) -> None:
 def tool(tool: str, args: tuple[str, ...], preset_name: str | None) -> None:
     """Run a built tool: inspector, validator or example (arguments are passed through).
 
-    Example: manage.py tool inspector Core.u --exports --limit 10
+    Example: uelib.py tool inspector Core.u --exports --limit 10
     """
     raise SystemExit(do_run(get_preset(preset_name), tool, args))
 
@@ -678,7 +718,7 @@ def doctor() -> None:
 @cli.group(invoke_without_command=True)
 @click.pass_context
 def config(ctx: click.Context) -> None:
-    """Show or change settings stored in .manage.json."""
+    """Show or change settings stored in .uelib.json."""
     if ctx.invoked_subcommand is None:
         print_settings()
 

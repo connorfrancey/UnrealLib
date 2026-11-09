@@ -1,0 +1,125 @@
+#pragma once
+
+/// @file
+/// @brief UE3 skeletal animation: AnimSet (bone tracks) and AnimSequence (compressed keys), decoding and ActorX PSA
+///        export.
+
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
+
+#include <UnrealLib/Assets/AssetObject.hpp>
+#include <UnrealLib/Assets/MeshTypes.hpp>
+
+namespace UnrealLib::Assets
+{
+    /// @brief AnimationKeyFormat (AKF_*).
+    enum class AnimKeyFormat : std::uint8_t
+    {
+        ConstantKeyLerp,  ///< Keys evenly spaced over the sequence.
+        VariableKeyLerp,  ///< Like ConstantKeyLerp, plus a frame table per multi-key track.
+        PerTrackCompression, ///< Each track has its own codec, component mask and optional frame table.
+        Unknown,
+    };
+
+    /// @brief AnimationCompressionFormat (ACF_*).
+    enum class AnimCompression : std::uint8_t
+    {
+        None,             ///< Full precision (FVector / FQuat).
+        Float96NoW,       ///< 3 floats, W restored.
+        Fixed48NoW,       ///< 3 x uint16, W restored.
+        IntervalFixed32NoW, ///< 11/11/10 bits in a range.
+        Fixed32NoW,       ///< 11/11/10 bits.
+        Float32NoW,       ///< Packed floats.
+        Identity,         ///< No data (identity).
+        Unknown,
+    };
+
+    /// @brief Parses an `AKF_*` enumerator name. Unknown names give AnimKeyFormat::Unknown.
+    [[nodiscard]] AnimKeyFormat anim_key_format_from_name(std::string_view name) noexcept;
+
+    /// @brief Parses an `ACF_*` enumerator name. Unknown names give AnimCompression::Unknown.
+    [[nodiscard]] AnimCompression anim_compression_from_name(std::string_view name) noexcept;
+
+    /// @brief Decoded keys of one bone.
+    struct AnimTrack
+    {
+        std::vector<Vec3> positions; ///< Translation keys (empty: use the reference pose).
+        std::vector<Quat> rotations; ///< Rotation keys (empty: use the reference pose).
+        std::vector<float> position_frames; ///< Frame of each translation key (empty: evenly spaced).
+        std::vector<float> rotation_frames; ///< Frame of each rotation key (empty: evenly spaced).
+
+        /// @brief Samples frame @p frame of @p num_frames: keys are evenly spaced unless the track has key frames
+        ///        (VariableKeyLerp, PerTrackCompression); positions are lerped and rotations nlerped between
+        ///        neighbours. Empty tracks give the identity.
+        void sample(std::int32_t frame, std::int32_t num_frames, Vec3& position, Quat& rotation) const;
+    };
+
+    /// @brief An AnimSequence export.
+    ///
+    /// Native data: from file version 577 on, RawAnimData (a bulk-serialized array of raw tracks: position keys, then
+    /// rotation keys, each array prefixed by its element size and count); then the CompressedByteStream
+    /// (TArray<byte>). The track layout comes from the properties. For ConstantKeyLerp and VariableKeyLerp,
+    /// CompressedTrackOffsets holds (translation offset, translation keys, rotation offset, rotation keys) per track;
+    /// below version 761 multi-key rotation tracks start with 24 bytes of mins/ranges, and VariableKeyLerp follows
+    /// each multi-key array with a frame table. For PerTrackCompression it holds (translation offset, rotation
+    /// offset) per track (-1: identity), and each track starts with a packed header (codec, component mask, key
+    /// count, frame-table flag). Tracks are aligned to 4 bytes. Format reference: UE Viewer.
+    struct AnimSequence
+    {
+        std::string name;                   ///< Object name.
+        std::string sequence_name;          ///< SequenceName property.
+        std::int32_t num_frames = 0;        ///< NumFrames.
+        float sequence_length = 0;          ///< SequenceLength (seconds).
+        float rate_scale = 1;               ///< RateScale.
+        bool additive = false;              ///< bIsAdditive.
+        AnimKeyFormat key_format = AnimKeyFormat::ConstantKeyLerp; ///< KeyEncodingFormat.
+        AnimCompression translation_format = AnimCompression::None; ///< TranslationCompressionFormat.
+        AnimCompression rotation_format = AnimCompression::None;    ///< RotationCompressionFormat.
+        std::vector<std::int32_t> track_offsets; ///< CompressedTrackOffsets.
+        std::vector<std::uint8_t> stream;   ///< CompressedByteStream.
+        std::vector<AnimTrack> tracks;      ///< Decoded tracks (one per AnimSet bone).
+        std::vector<AnimTrack> raw_tracks;  ///< RawAnimData (file version >= 577; often one key per track when
+                                            ///< cooked).
+        std::size_t stream_bytes_used = 0;  ///< Bytes covered by the decoded tracks (with alignment).
+        AssetProperties properties;         ///< Tagged properties.
+
+        /// @brief Frames per second (NumFrames / SequenceLength * RateScale; 30 if the length is 0).
+        [[nodiscard]] float frame_rate() const noexcept;
+    };
+
+    /// @brief Reads and decodes an AnimSequence export. The native data must be consumed exactly and every track must
+    ///        decode inside the byte stream.
+    /// @param linker Resolves the class hierarchy.
+    /// @param object The AnimSequence export.
+    /// @param schema Needed for CompressedTrackOffsets only if its array is not decodable without one; the reader
+    ///        also accepts the raw int32 elements.
+    [[nodiscard]] AnimSequence read_anim_sequence(Linker& linker, ObjectRef object,
+                                                  const PropertySchema* schema = nullptr);
+
+    /// @brief Decodes @p sequence.stream into @p sequence.tracks (called by read_anim_sequence()).
+    /// @param sequence The sequence to decode.
+    /// @param ranges_before_rotations Whether every multi-key rotation track of a ConstantKeyLerp/VariableKeyLerp
+    ///        stream starts with mins/ranges (file versions below 761), not only IntervalFixed32NoW ones.
+    /// @throws UnsupportedError for an unknown key format or codec; SerializationError if a track leaves the stream.
+    void decode_anim_tracks(AnimSequence& sequence, bool ranges_before_rotations);
+
+    /// @brief An AnimSet export: the bones its sequences animate.
+    struct AnimSet
+    {
+        std::string name;                         ///< Object name.
+        std::vector<std::string> track_bone_names; ///< One per track, in track order.
+        std::vector<ObjectIndex> sequences;       ///< Sequences property.
+        bool rotation_only = false;               ///< bAnimRotationOnly.
+        AssetProperties properties;               ///< Tagged properties.
+    };
+
+    /// @brief Reads an AnimSet export, or one of a class derived from it (Mirror's Edge: TdAnimSet). Properties only:
+    ///        there is no native data at version 536.
+    [[nodiscard]] AnimSet read_anim_set(Linker& linker, ObjectRef object, const PropertySchema* schema = nullptr);
+
+    /// @brief Writes an ActorX PSA file with @p sequences, sampled once per frame. Like UE Viewer, positions and
+    ///        rotations are mirrored on Y (rotation Y and W negated) to match to_psk().
+    [[nodiscard]] std::vector<std::byte> to_psa(const AnimSet& set, std::span<const AnimSequence> sequences);
+}

@@ -51,6 +51,13 @@ namespace UnrealLib
     /// @throws UnsupportedError for CompressionMethod::Lzx.
     void decompress(CompressionMethod method, std::span<const std::byte> input, std::span<std::byte> output);
 
+    /// @brief Whether UnrealLib can compress with @p method (zlib, LZO1X).
+    [[nodiscard]] bool can_compress(CompressionMethod method) noexcept;
+
+    /// @brief Compresses one block with @p method (zlib or LZO1X; the output decodes with decompress()).
+    /// @throws UnsupportedError for other methods.
+    [[nodiscard]] std::vector<std::byte> compress(CompressionMethod method, std::span<const std::byte> input);
+
     /// @brief Compresses @p input with zlib (used for writing and tests).
     /// @param input Bytes to compress.
     /// @param level zlib level 0–9, or -1 for the default.

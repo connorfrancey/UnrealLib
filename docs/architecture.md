@@ -108,23 +108,23 @@ Source: `EliotVU/Unreal-Library` @ `8236c39` (334 C# files). Projects: `src` (El
 
 | Upstream area | Key types | Port status / plan |
 |---------------|-----------|--------------------|
-| Package | `UnrealPackage`, `PackageFileSummary`, `GameBuild` (build table with `[Build(ver, lic)]`), `UnrealPackage.Deserialize` | **Ported** (summary, tables). `GameBuild`/`EngineBranch` → `GameProfile` |
+| Package | `UnrealPackage`, `PackageFileSummary`, `GameBuild` (build table with `[Build(ver, lic)]`), `UnrealPackage.Deserialize` | **Ported** (summary, tables, writing). `GameBuild`/`EngineBranch` → `GameProfile` |
 | Streams | `UnrealStream.cs`: `UnrealReader`, `UnrealWriter`, `IUnrealStream`, `UPackageStream` | **Ported** as `BinaryReader`/`BinaryWriter` + context |
 | Tables | `Core/Tables`: `UNameTableItem`, `UImportTableItem`, `UExportTableItem`, `UGenerationTableItem`, `UPackageIndex`, `UObjectThumbnailTableItem` | **Ported** except thumbnails |
 | Compression | `UnrealPackageCompression.cs` (chunk structs only; upstream does not decompress whole packages) | **Ported and extended** (LZO1X + zlib decompression) |
 | Version gates | `Branch/PackageObjectLegacyVersion.cs` | Ported subset → `LegacyVersion` |
-| Branches | `Branch/EngineBranch`, `DefaultEngineBranch` (token maps), `UE2/*`, `UE3/*` per-game | Mirror's Edge branch data captured in docs; token map → M5 |
-| Objects | `Core/Classes`: `UObject`, `UField`, `UStruct`, `UClass`, `UState`, `UFunction`, `UEnum`, `UConst`, `UScriptStruct`, `UTextBuffer`, `UMetaData`, `UComponent`, `UPackage` | M3–M5 |
-| Properties | `Core/Classes/Props`: 19 `U*Property` types; `UDefaultProperty` (tag parsing) | M4 |
-| Types | `Core/Types`: `UBulkData`, `UArray`, `UMap`, `UName`, math structs | M4/M7 |
-| Bytecode | `Core/Tokens/*`, `UnrealTokens.cs`, `ByteCodeDecompiler.cs` (decoding and decompiling interleaved) | M5 (decoder) and M6 (decompiler), deliberately split |
-| Decompiler | `*Decompiler.cs` partial classes, `Eliot.UELib.Decompiler*` | M6, M8 (T3D) |
-| Engine assets | `Engine/Classes`: 44 classes (`UTexture2D`, `USoundNodeWave`, `UFont`, `UModel`, `UPolys`, …) | M7, Mirror's Edge formats first |
+| Branches | `Branch/EngineBranch`, `DefaultEngineBranch` (token maps), `UE2/*`, `UE3/*` per-game | **Ported** for UE3 / Mirror's Edge (`GameProfile`, `TokenMap::ue3`) |
+| Objects | `Core/Classes`: `UObject`, `UField`, `UStruct`, `UClass`, `UState`, `UFunction`, `UEnum`, `UConst`, `UScriptStruct`, `UTextBuffer`, `UMetaData`, `UComponent`, `UPackage` | **Ported** (UObject header, `Fields.hpp`, `Linker`) |
+| Properties | `Core/Classes/Props`: 19 `U*Property` types; `UDefaultProperty` (tag parsing) | **Ported** (`PropertyValue.hpp`; MapProperty values raw) |
+| Types | `Core/Types`: `UBulkData`, `UArray`, `UMap`, `UName`, math structs | **Ported** |
+| Bytecode | `Core/Tokens/*`, `UnrealTokens.cs`, `ByteCodeDecompiler.cs` (decoding and decompiling interleaved) | **Ported**, decoder and decompiler deliberately split |
+| Decompiler | `*Decompiler.cs` partial classes, `Eliot.UELib.Decompiler*` | **Ported** (UnrealScript, T3D export; T3D import is new) |
+| Engine assets | `Engine/Classes`: 44 classes (`UTexture2D`, `USoundNodeWave`, `UFont`, `UModel`, `UPolys`, …) | **Ported and extended** for Mirror's Edge (textures with decoding, sounds, meshes, animations, materials, brushes); fonts, terrain etc. not decoded |
 | Encoding | `UnrealEncoding` (Windows-1252), `Decoding/` (crypto for some games) | 1252 ported; crypto not needed for Mirror's Edge |
 | Services | `LibServices` logging | → `Log.hpp` |
 
 Not needed for the initial target: UE1/UE2 branches, UE4 summary handling, console-specific branches, per-game
-crypto decoders.
+crypto decoders. Per-feature verification results: [compatibility.md](compatibility.md).
 
 ## Deviations from upstream
 

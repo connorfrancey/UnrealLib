@@ -1,5 +1,6 @@
 #include <UnrealLib/Linker/Linker.hpp>
 
+#include <algorithm>
 #include <unordered_set>
 
 #include <fmt/format.h>
@@ -81,6 +82,11 @@ namespace UnrealLib
             throw Error(ErrorCode::NotFound, fmt::format("search path '{}' is not a directory", utf8(directory)));
         }
         auto add = [&](const std::filesystem::path& file) {
+            if (Text::iequals(file.extension().string(), ".tfc"))
+            {
+                m_texture_caches.try_emplace(utf8(file.stem()), file);
+                return;
+            }
             if (!is_package_file(file))
             {
                 return;
@@ -139,9 +145,69 @@ namespace UnrealLib
         return insert(std::move(package));
     }
 
+    void Linker::set_forced_export_index(ForcedExportIndex index)
+    {
+        m_forced_exports = std::move(index);
+        m_cache.clear();
+    }
+
+    std::size_t Linker::index_forced_exports()
+    {
+        m_forced_exports.clear();
+        std::vector<std::filesystem::path> files;
+        for (const auto& [stem, file] : m_index) files.push_back(file);
+        std::sort(files.begin(), files.end());
+        std::size_t found = 0;
+        for (const std::filesystem::path& file : files)
+        {
+            try
+            {
+                const Package host = Package::open(file, m_options);
+                for (std::size_t i = 0; i < host.exports().size(); ++i)
+                {
+                    const ExportEntry& e = host.exports()[i];
+                    if (e.outer.is_null() && (e.export_flags & ExportFlag::ForcedExport) != 0 &&
+                        host.class_name(ObjectIndex::from_export(i)) == "Package")
+                    {
+                        m_forced_exports[host.object_name(ObjectIndex::from_export(i))].push_back(file);
+                        ++found;
+                    }
+                }
+            }
+            catch (const Error& e)
+            {
+                m_diagnostics.warning("linker.forced-export-index",
+                                      fmt::format("'{}' skipped while indexing forced exports: {}", utf8(file),
+                                                  e.what()));
+            }
+        }
+        m_cache.clear();
+        return found;
+    }
+
+    std::optional<std::filesystem::path> Linker::find_texture_file_cache(std::string_view name) const
+    {
+        const auto it = m_texture_caches.find(std::string(name));
+        if (it == m_texture_caches.end())
+        {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
     const Package& Linker::add(Package package)
     {
         return insert(std::make_unique<Package>(std::move(package)));
+    }
+
+    std::optional<std::filesystem::path> Linker::find_package_file(std::string_view name) const
+    {
+        const auto it = m_index.find(std::string(name));
+        if (it == m_index.end())
+        {
+            return std::nullopt;
+        }
+        return it->second;
     }
 
     const Package* Linker::find_package(std::string_view name)
@@ -262,72 +328,113 @@ namespace UnrealLib
         }
 
         const std::string package_name = text_of(package, chain.back().name);
-        const Package* target = find_package(package_name);
-        if (!target)
-        {
-            const auto failed = m_failed.find(package_name);
-            return {ResolveStatus::PackageNotFound, {},
-                    failed != m_failed.end() ? fmt::format("package '{}' failed to load", package_name)
-                                             : fmt::format("package '{}' is not in the search paths", package_name)};
-        }
-        if (chain.size() == 1)
-        {
-            return {ResolveStatus::Package, ObjectRef{target, ObjectIndex{}}, {}};
-        }
 
-        const PackageLookup& lookup = lookup_for(*target);
-        auto export_class = [&](std::size_t export_index) {
-            const ObjectIndex cls = target->exports()[export_index].class_index;
-            return target->is_valid(cls) ? target->class_name(ObjectIndex::from_export(export_index))
-                                         : std::string("<invalid>");
-        };
+        // Walks the chain below the package inside `target`, starting at `outer` (null: the package root; otherwise
+        // a forced export standing in for the package).
+        const auto walk = [&](const Package* target, ObjectIndex outer) -> Resolution {
+            const PackageLookup& lookup = lookup_for(*target);
+            auto export_class = [&](std::size_t export_index) {
+                const ObjectIndex cls = target->exports()[export_index].class_index;
+                return target->is_valid(cls) ? target->class_name(ObjectIndex::from_export(export_index))
+                                             : std::string("<invalid>");
+            };
 
-        ObjectIndex outer{};
-        for (std::size_t k = chain.size() - 1; k-- > 0;)
-        {
-            const Element& entry = chain[k];
-            const std::string name = text_of(package, entry.name);
-            const std::string& wanted_class = entry.class_name;
-            const auto found = lookup.exports.find(name_key(outer.value, name));
-
-            std::optional<std::size_t> match;
-            if (found != lookup.exports.end())
+            for (std::size_t k = chain.size() - 1; k-- > 0;)
             {
-                for (const std::size_t candidate : found->second)
+                const Element& entry = chain[k];
+                const std::string name = text_of(package, entry.name);
+                const std::string& wanted_class = entry.class_name;
+                const auto found = lookup.exports.find(name_key(outer.value, name));
+
+                std::optional<std::size_t> match;
+                if (found != lookup.exports.end())
                 {
-                    if (Text::iequals(export_class(candidate), wanted_class))
+                    for (const std::size_t candidate : found->second)
                     {
-                        match = candidate;
-                        break;
+                        if (Text::iequals(export_class(candidate), wanted_class))
+                        {
+                            match = candidate;
+                            break;
+                        }
                     }
                 }
-            }
-            if (match)
-            {
-                outer = ObjectIndex::from_export(*match);
-                continue;
-            }
+                if (match)
+                {
+                    outer = ObjectIndex::from_export(*match);
+                    continue;
+                }
 
-            const std::string path = package.object_path(self);
-            const bool is_class_import =
-                Text::iequals(entry.class_package, "Core") && Text::iequals(wanted_class, "Class");
-            if (k == 0 && is_class_import)
-            {
-                // UE3 classes that exist in script always have a UClass export in their package; a class import
-                // without one refers to a native-only (intrinsic) class.
-                return {ResolveStatus::Intrinsic, {},
-                        fmt::format("class '{}' has no export in '{}' (native-only class)", name, package_name)};
+                const std::string path = package.object_path(self);
+                const bool is_class_import =
+                    Text::iequals(entry.class_package, "Core") && Text::iequals(wanted_class, "Class");
+                if (is_class_import)
+                {
+                    // UE3 classes that exist in script always have a UClass export in their package; a class import
+                    // without one refers to a native-only (intrinsic) class. Imports nested in such a class (its
+                    // properties, e.g. Engine.FracturedStaticMesh.FragmentDestroyEffects in UDK 868) are intrinsic too.
+                    return {ResolveStatus::Intrinsic, {},
+                            k == 0 ? fmt::format("class '{}' has no export in '{}' (native-only class)", name, package_name)
+                                   : fmt::format("'{}' is a member of native-only class '{}'", path, name)};
+                }
+                if (found != lookup.exports.end())
+                {
+                    const std::size_t candidate = found->second.front();
+                    return {ResolveStatus::ClassMismatch, ObjectRef{target, ObjectIndex::from_export(candidate)},
+                            fmt::format("'{}' expects class '{}' but '{}' has a '{}'", path, wanted_class, package_name,
+                                        export_class(candidate))};
+                }
+                return {ResolveStatus::ObjectNotFound, {}, fmt::format("'{}' not found in package '{}'", path, package_name)};
             }
-            if (found != lookup.exports.end())
+            return {ResolveStatus::Export, ObjectRef{target, outer}, {}};
+        };
+
+        if (const Package* target = find_package(package_name))
+        {
+            if (chain.size() == 1)
             {
-                const std::size_t candidate = found->second.front();
-                return {ResolveStatus::ClassMismatch, ObjectRef{target, ObjectIndex::from_export(candidate)},
-                        fmt::format("'{}' expects class '{}' but '{}' has a '{}'", path, wanted_class, package_name,
-                                    export_class(candidate))};
+                return {ResolveStatus::Package, ObjectRef{target, ObjectIndex{}}, {}};
             }
-            return {ResolveStatus::ObjectNotFound, {}, fmt::format("'{}' not found in package '{}'", path, package_name)};
+            return walk(target, ObjectIndex{});
         }
-        return {ResolveStatus::Export, ObjectRef{target, outer}, {}};
+
+        // Seek-free cooked games ship no file for many packages: their objects are forced exports (under the
+        // original path) inside the packages that use them. With index_forced_exports(), resolve through those.
+        if (const auto copies = m_forced_exports.find(package_name); copies != m_forced_exports.end())
+        {
+            std::optional<Resolution> last;
+            for (const std::filesystem::path& file : copies->second)
+            {
+                const Package& host = load(file);
+                for (std::size_t i = 0; i < host.exports().size(); ++i)
+                {
+                    const ExportEntry& e = host.exports()[i];
+                    if (!e.outer.is_null() || (e.export_flags & ExportFlag::ForcedExport) == 0 ||
+                        !Text::iequals(host.object_name(ObjectIndex::from_export(i)), package_name))
+                    {
+                        continue;
+                    }
+                    const ObjectIndex forced = ObjectIndex::from_export(i);
+                    if (chain.size() == 1)
+                    {
+                        return {ResolveStatus::Export, ObjectRef{&host, forced}, {}};
+                    }
+                    Resolution r = walk(&host, forced);
+                    if (r.status == ResolveStatus::Export || r.status == ResolveStatus::Intrinsic)
+                    {
+                        return r;
+                    }
+                    last = std::move(r);
+                }
+            }
+            if (last)
+            {
+                return *last;
+            }
+        }
+        const auto failed = m_failed.find(package_name);
+        return {ResolveStatus::PackageNotFound, {},
+                failed != m_failed.end() ? fmt::format("package '{}' failed to load", package_name)
+                                         : fmt::format("package '{}' is not in the search paths", package_name)};
     }
 
     std::string Linker::qualified_path(ObjectRef ref) const
@@ -436,18 +543,17 @@ namespace UnrealLib
         input.object_flags = entry.object_flags;
         input.is_class = entry.class_index.is_null();
 
-        // ClassDefaultObject on the object or any of its (export) outers.
-        for (ObjectIndex current = object.index; current.is_export() && object.package->is_valid(current);
-             current = object.package->exports()[current.export_index()].outer)
+        // ClassDefaultObject on the object or any of its (export) outers. A malformed package can make the outer
+        // chain cyclic (A -> B -> A); a chain can visit each export at most once, so stop after that many steps.
+        std::size_t steps = 0;
+        for (ObjectIndex current = object.index;
+             current.is_export() && object.package->is_valid(current) && steps <= object.package->exports().size();
+             current = object.package->exports()[current.export_index()].outer, ++steps)
         {
             if ((object.package->exports()[current.export_index()].object_flags & ObjectFlag::ClassDefaultObject) != 0)
             {
                 input.is_class_default_template = true;
                 break;
-            }
-            if (current == object.package->exports()[current.export_index()].outer)
-            {
-                break; // self-outer guard
             }
         }
 
@@ -457,6 +563,13 @@ namespace UnrealLib
             return std::nullopt;
         }
         input.is_component = *component;
+        if ((entry.object_flags & ObjectFlag::ClassDefaultObject) == 0)
+        {
+            const std::uint16_t v = object.package->summary().file_version;
+            input.dominant_light_shadow_map =
+                (v >= 617 && is_a(object, "Engine.DominantDirectionalLightComponent").value_or(false)) ||
+                (v >= 682 && is_a(object, "Engine.DominantSpotLightComponent").value_or(false));
+        }
         return input;
     }
 
@@ -474,5 +587,67 @@ namespace UnrealLib
         BinaryReader reader(data, object.package->context(),
                             static_cast<std::uint64_t>(object.export_entry().serial_offset));
         return read_object_header(reader, *input);
+    }
+
+    ObjectProperties Linker::read_properties(ObjectRef object, const PropertySchema* schema)
+    {
+        const auto input = header_input(object);
+        if (!input)
+        {
+            const Resolution& cls = class_of(object);
+            throw Error(ErrorCode::NotFound,
+                fmt::format("cannot determine the class hierarchy of '{}' (class {}: {})", qualified_path(object),
+                            to_string(cls.status), cls.detail));
+        }
+        const auto data = object.package->export_data(object.index.export_index());
+        BinaryReader reader(data, object.package->context(),
+                            static_cast<std::uint64_t>(object.export_entry().serial_offset));
+        ObjectProperties result;
+        result.header = read_object_header(reader, *input);
+        if (!input->is_class)
+        {
+            PropertyReadOptions options;
+            options.names = &object.package->names();
+            options.schema = schema;
+            options.owner = object.package->class_name(object.index);
+            options.diagnostics = &result.diagnostics;
+            result.properties = UnrealLib::read_properties(reader, options);
+        }
+        result.end_offset = reader.position();
+        return result;
+    }
+
+    FieldObject Linker::read_field(ObjectRef object, const PropertySchema* schema)
+    {
+        if (!object.is_export())
+        {
+            throw Error(ErrorCode::InvalidArgument, "read_field() requires an export reference");
+        }
+        const Package& package = *object.package;
+        PropertyType property_type = PropertyType::Unknown;
+        const std::string class_name = package.class_name(object.index);
+        const auto kind = field_kind_of(class_name, &property_type);
+        if (!kind)
+        {
+            throw Error(ErrorCode::InvalidArgument,
+                        fmt::format("'{}' (class {}) is not a reflection object", qualified_path(object), class_name));
+        }
+        const auto input = header_input(object);
+        if (!input)
+        {
+            throw Error(ErrorCode::NotFound,
+                        fmt::format("cannot determine the class hierarchy of '{}'", qualified_path(object)));
+        }
+        const auto data = package.export_data(object.index.export_index());
+        BinaryReader reader(data, package.context(), static_cast<std::uint64_t>(object.export_entry().serial_offset));
+        FieldReadOptions options;
+        options.names = &package.names();
+        options.cooked = (package.summary().package_flags & PackageFlag::Cooked) != 0;
+        options.console_cooked = options.cooked && (package.profile().platform == Platform::Xbox360 ||
+                                                    package.profile().platform == Platform::PS3);
+        options.dishonored_class_layout = package.profile().reflection.dishonored_class_layout;
+        options.owner_name = package.object_name(object.index);
+        options.schema = schema;
+        return UnrealLib::read_field(reader, *kind, property_type, *input, options);
     }
 }

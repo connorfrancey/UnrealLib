@@ -11,7 +11,7 @@ cmake_minimum_required(VERSION 3.25)
 project(UnrealLib
         VERSION 0.1.0
         DESCRIPTION "Native C++20 Unreal Engine 3 package library"
-        HOMEPAGE_URL "https://github.com/EliotVU/Unreal-Library"
+        HOMEPAGE_URL "https://github.com/connorfrancey/UnrealLib"
         LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" "${PROJECT_SOURCE_DIR}/cmake/modules")
@@ -21,6 +21,7 @@ include(Ccache) # before any target (including CPM dependencies) is created
 include(CompilerOptions)
 include(Dependencies)
 include(AddUnrealLibModule)
+include(GNUInstallDirs)
 
 # Generated headers (version information).
 set(UNREALLIB_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/generated/include")
@@ -36,12 +37,24 @@ if (UNREALLIB_BUILD_TESTS)
     add_subdirectory(tests)
 endif ()
 
+if (UNREALLIB_BUILD_FUZZERS)
+    add_subdirectory(tests/Fuzz)
+endif ()
+
 if (UNREALLIB_BUILD_TOOLS)
     add_subdirectory(tools)
 endif ()
 
+if (UNREALLIB_BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
+endif ()
+
 if (UNREALLIB_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif ()
+
+if (UNREALLIB_INSTALL)
+    include(Install)
 endif ()
 
 if (UNREALLIB_BUILD_DOCS)

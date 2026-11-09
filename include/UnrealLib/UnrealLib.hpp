@@ -38,4 +38,30 @@
 #include <UnrealLib/Objects/ObjectFlags.hpp>
 #include <UnrealLib/Objects/ObjectHeader.hpp>
 
+#include <UnrealLib/Properties/PropertyTag.hpp>
+#include <UnrealLib/Properties/PropertyValue.hpp>
+
+#include <UnrealLib/Bytecode/Bytecode.hpp>
+
+#include <UnrealLib/Reflection/Fields.hpp>
+
 #include <UnrealLib/Linker/Linker.hpp>
+#include <UnrealLib/Decompiler/Decompiler.hpp>
+#include <UnrealLib/Decompiler/NativeTable.hpp>
+#include <UnrealLib/Decompiler/Statements.hpp>
+#include <UnrealLib/Linker/ReflectionSchema.hpp>
+
+#include <UnrealLib/Assets/Animation.hpp>
+#include <UnrealLib/Assets/AssetObject.hpp>
+#include <UnrealLib/Assets/Brush.hpp>
+#include <UnrealLib/Assets/BulkData.hpp>
+#include <UnrealLib/Assets/Image.hpp>
+#include <UnrealLib/Assets/Material.hpp>
+#include <UnrealLib/Assets/MeshTypes.hpp>
+#include <UnrealLib/Assets/SkeletalMesh.hpp>
+#include <UnrealLib/Assets/Sound.hpp>
+#include <UnrealLib/Assets/StaticMesh.hpp>
+#include <UnrealLib/Assets/Texture.hpp>
+
+#include <UnrealLib/T3D/T3D.hpp>
+#include <UnrealLib/Writer/PackageWriter.hpp>

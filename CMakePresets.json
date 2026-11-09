@@ -55,6 +55,22 @@
       }
     },
     {
+      "name": "clang-cl-x64-fuzz",
+      "displayName": "clang-cl x64 libFuzzer + AddressSanitizer (fuzzers only)",
+      "description": "Builds tests/Fuzz as libFuzzer executables: static release CRT (libFuzzer's runtime is /MT), unoptimized (optimized code under ASan + libFuzzer crashes while throwing C++ exceptions with clang-cl 22; see docs/development.md). Tests, tools and examples are off.",
+      "inherits": "clang-cl-x64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "UNREALLIB_ENABLE_ASAN": "ON",
+        "UNREALLIB_BUILD_FUZZERS": "ON",
+        "UNREALLIB_BUILD_TESTS": "OFF",
+        "UNREALLIB_BUILD_TOOLS": "OFF",
+        "UNREALLIB_BUILD_EXAMPLES": "OFF",
+        "UNREALLIB_INSTALL": "OFF"
+      }
+    },
+    {
       "name": "msvc-x64-asan",
       "displayName": "MSVC x64 Debug + AddressSanitizer (needs the VS 'C++ AddressSanitizer' component)",
       "inherits": "msvc-x64",
@@ -68,6 +84,7 @@
     { "name": "msvc-x86-release", "configurePreset": "msvc-x86-release" },
     { "name": "clang-cl-x64-debug", "configurePreset": "clang-cl-x64-debug" },
     { "name": "clang-cl-x64-asan", "configurePreset": "clang-cl-x64-asan" },
+    { "name": "clang-cl-x64-fuzz", "configurePreset": "clang-cl-x64-fuzz" },
     { "name": "msvc-x64-asan", "configurePreset": "msvc-x64-asan" }
   ],
   "testPresets": [

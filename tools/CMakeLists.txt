@@ -1,6 +1,5 @@
 # ----------------------------------------------------------------------------------------------------------------------
-# Command-line tools (CLI11). PackageExtractor and ScriptDecompiler will be added with the asset (M7) and
-# decompiler (M6) milestones.
+# Command-line tools (CLI11).
 # ----------------------------------------------------------------------------------------------------------------------
 
 add_library(unreallib_tools_common STATIC
@@ -14,7 +13,13 @@ function(unreallib_add_tool target output_name)
     target_link_libraries(${target} PRIVATE unreallib_tools_common CLI11::CLI11)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME ${output_name} FOLDER "UnrealLib/Tools")
     unreallib_set_compiler_options(${target})
+    if (UNREALLIB_INSTALL)
+        install(TARGETS ${target} RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT UnrealLib_Tools)
+    endif ()
 endfunction()
 
 unreallib_add_tool(unreallib_package_inspector UnrealPackageInspector PackageInspector/main.cpp)
 unreallib_add_tool(unreallib_package_validator UnrealPackageValidator PackageValidator/main.cpp)
+unreallib_add_tool(unreallib_script_decompiler UnrealScriptDecompiler ScriptDecompiler/main.cpp)
+unreallib_add_tool(unreallib_package_extractor UnrealPackageExtractor PackageExtractor/main.cpp)
+unreallib_add_tool(unreallib_t3d_importer UnrealT3DImporter T3DImporter/main.cpp)

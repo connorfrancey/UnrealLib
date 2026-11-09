@@ -23,13 +23,14 @@ message(STATUS "UnrealLib: resolving dependencies through CPM.cmake")
 # Runtime dependencies (always required)
 # ----------------------------------------------------------------------------------------------------------------------
 
+# With UNREALLIB_INSTALL, fmt, spdlog and zlib install themselves next to UnrealLib (its static libraries need them).
 # fmt must come before spdlog so spdlog uses this copy (SPDLOG_FMT_EXTERNAL) instead of its bundled one.
 CPMAddPackage(
         NAME fmt
         GITHUB_REPOSITORY fmtlib/fmt
         GIT_TAG ${FMT_TAG}
         OPTIONS
-            "FMT_INSTALL OFF"
+            "FMT_INSTALL ${UNREALLIB_INSTALL}"
             "FMT_TEST OFF"
             "FMT_DOC OFF"
             "FMT_MODULE OFF"
@@ -41,7 +42,7 @@ CPMAddPackage(
         GIT_TAG ${SPDLOG_TAG}
         OPTIONS
             "SPDLOG_FMT_EXTERNAL ON"
-            "SPDLOG_INSTALL OFF"
+            "SPDLOG_INSTALL ${UNREALLIB_INSTALL}"
             "SPDLOG_BUILD_EXAMPLE OFF"
             "SPDLOG_BUILD_TESTS OFF"
             "SPDLOG_BUILD_BENCH OFF"
@@ -56,7 +57,7 @@ CPMAddPackage(
             "ZLIB_BUILD_TESTING OFF"
             "ZLIB_BUILD_SHARED OFF"
             "ZLIB_BUILD_STATIC ON"
-            "ZLIB_INSTALL OFF"
+            "ZLIB_INSTALL ${UNREALLIB_INSTALL}"
 )
 
 # zlib >= 1.4 exports ZLIB::ZLIBSTATIC for the static build; older/system zlib exports ZLIB::ZLIB.
@@ -69,12 +70,14 @@ else ()
 endif ()
 
 # ----------------------------------------------------------------------------------------------------------------------
-# Tool / test dependencies (only fetched when needed)
+# Tool / test dependencies (only fetched when needed). EXCLUDE_FROM_ALL keeps them out of `install` (and out of the
+# default build except where a target links them).
 # ----------------------------------------------------------------------------------------------------------------------
 
 if (UNREALLIB_BUILD_TOOLS OR UNREALLIB_BUILD_TESTS)
     CPMAddPackage(
             NAME nlohmann_json
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY nlohmann/json
             GIT_TAG ${JSON_TAG}
             OPTIONS
@@ -86,6 +89,7 @@ endif ()
 if (UNREALLIB_BUILD_TOOLS)
     CPMAddPackage(
             NAME CLI11
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY CLIUtils/CLI11
             GIT_TAG ${CLI11_TAG}
             OPTIONS
@@ -100,6 +104,7 @@ endif ()
 if (UNREALLIB_BUILD_TESTS)
     CPMAddPackage(
             NAME googletest
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY google/googletest
             GIT_TAG ${GOOGLETEST_TAG}
             OPTIONS
@@ -107,6 +112,44 @@ if (UNREALLIB_BUILD_TESTS)
                 "BUILD_GMOCK ON"
                 "gtest_force_shared_crt ON"
     )
+
+    # Property-based testing (RC_GTEST_PROP): generated inputs with shrinking, run as ordinary GoogleTest tests.
+    CPMAddPackage(
+            NAME rapidcheck
+            EXCLUDE_FROM_ALL YES
+            GITHUB_REPOSITORY emil-e/rapidcheck
+            GIT_TAG ${RAPIDCHECK_TAG}
+            OPTIONS
+                "RC_ENABLE_GTEST ON"
+                "RC_ENABLE_GMOCK OFF"
+                "RC_ENABLE_BOOST OFF"
+                "RC_ENABLE_CATCH OFF"
+                "RC_ENABLE_DOCTEST OFF"
+                "RC_ENABLE_TESTS OFF"
+                "RC_ENABLE_EXAMPLES OFF"
+                "RC_INSTALL_ALL_EXTRAS OFF"
+    )
+
+    # Approval (golden master) tests: output compared against committed tests/Regression/approved/*.approved.txt.
+    # Uses our GoogleTest; its own tests, examples and bundled third-party frameworks are off.
+    CPMAddPackage(
+            NAME ApprovalTests
+            EXCLUDE_FROM_ALL YES
+            GITHUB_REPOSITORY approvals/ApprovalTests.cpp
+            GIT_TAG ${APPROVALTESTS_TAG}
+            OPTIONS
+                "APPROVAL_TESTS_BUILD_TESTING OFF"
+                "APPROVAL_TESTS_BUILD_EXAMPLES OFF"
+                "APPROVAL_TESTS_BUILD_DOCS OFF"
+                "APPROVAL_TESTS_ENABLE_CODE_COVERAGE OFF"
+                "APPROVAL_TESTS_BUILD_THIRD_PARTY_CATCH2 OFF"
+                "APPROVAL_TESTS_BUILD_THIRD_PARTY_DOCTEST OFF"
+                "APPROVAL_TESTS_BUILD_THIRD_PARTY_UT OFF"
+    )
+
+    # Third-party headers: consumers include them as system headers, so our /W4 doesn't report their warnings
+    # (e.g. C4324 in rapidcheck/detail/Variant.h on x86).
+    set_target_properties(rapidcheck ApprovalTests PROPERTIES SYSTEM TRUE)
 endif ()
 
 if (UNREALLIB_BUILD_TESTS AND UNREALLIB_BUILD_DIFFERENTIAL)
@@ -122,6 +165,7 @@ endif ()
 if (UNREALLIB_BUILD_BENCHMARKS)
     CPMAddPackage(
             NAME benchmark
+            EXCLUDE_FROM_ALL YES
             GITHUB_REPOSITORY google/benchmark
             GIT_TAG ${GOOGLEBENCHMARK_TAG}
             OPTIONS

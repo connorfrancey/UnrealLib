@@ -45,10 +45,40 @@ namespace UnrealLib
         p.cooker_versions = {60, 0};
         p.endian = Endian::Little;
         p.compression_methods = {CompressionMethod::None, CompressionMethod::Lzo};
+        // Upstream DefaultEngineBranch.BuildTokenMap: `case MirrorsEdge: tokenMap[0x4F] = typeof(UnresolvedToken)`.
+        p.bytecode_overrides = {{std::uint8_t{0x4F}, "Unresolved"}};
+        // Found by the asset corpus sweep: all 18,976 static meshes have 4 bytes after ThumbnailDistance.
+        p.assets.static_mesh_trailing_float = true;
+        // UE Viewer (MIT), UnMesh3.cpp `#if MEDGE` branches (licensee >= 13 / >= 15); Mirror's Edge is licensee 43.
+        p.assets.skeletal_chunk_uv_sets = 3;
+        p.assets.skeletal_mesh_leading_int = true;
+        p.assets.skeletal_gpu_uv_count = true;
+        p.assets.skeletal_lod_ends_after_gpu_skin = true;
         p.verified = true;
         p.notes =
             "Upstream UELib: GameBuild [Build(536, 43)] MirrorsEdge. Verified against the Steam release: 2425/2426 "
             "packages are 536/43, engine 3716, cooker 60 (0 for editor-saved packages), compression none or LZO.";
+        return p;
+    }
+
+    GameProfile make_dishonored_pc_profile()
+    {
+        GameProfile p;
+        p.id = "dishonored-pc";
+        p.name = "Dishonored PC";
+        p.generation = EngineGeneration::UE3;
+        p.platform = Platform::PC;
+        p.min_file_version = 801;
+        p.max_file_version = 801;
+        p.licensee_version = std::uint16_t{30};
+        p.engine_version = 9411;
+        p.cooker_versions = {133};
+        p.endian = Endian::Little;
+        p.compression_methods = {CompressionMethod::None, CompressionMethod::Lzo};
+        p.reflection.dishonored_class_layout = true;
+        p.verified = false;
+        p.notes = "Upstream UELib: GameBuild [Build(801, 30)] Dishonored and its `#if DISHONORED` branches. Steam "
+                  "release: 801/30, engine 9411, cooker 133, LZO; packages, tables and reflection checked.";
         return p;
     }
 
@@ -73,6 +103,7 @@ namespace UnrealLib
         static const GameProfileRegistry registry = [] {
             GameProfileRegistry r;
             r.add(make_mirrors_edge_pc_profile());
+            r.add(make_dishonored_pc_profile());
             r.add(make_generic_ue3_profile());
             return r;
         }();

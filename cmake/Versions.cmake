@@ -11,6 +11,9 @@ set(FMT_TAG 12.2.0)
 set(ZLIB_TAG v1.4)
 set(JSON_TAG v3.12.0)
 set(CLI11_TAG v2.7.2)
+# RapidCheck has no release tags: pinned to a master commit.
+set(APPROVALTESTS_TAG v.10.13.0)
+set(RAPIDCHECK_TAG 2c3c4365aca21ef4e612768fdc95b1ce8b39a651)
 
 # Upstream C# UELib (differential testing only; built with dotnet, never linked). Commit pinned for reproducibility.
 set(UELIB_TAG 8236c39b79e30887a487ecf9b018204e430a5ebc)

@@ -18,6 +18,8 @@
 #include <UnrealLib/Core/Diagnostics.hpp>
 #include <UnrealLib/Objects/ObjectHeader.hpp>
 #include <UnrealLib/Package/Package.hpp>
+#include <UnrealLib/Properties/PropertyValue.hpp>
+#include <UnrealLib/Reflection/Fields.hpp>
 #include <UnrealLib/Utilities/Text.hpp>
 
 namespace UnrealLib
@@ -73,6 +75,15 @@ namespace UnrealLib
         }
     };
 
+    /// @brief The script properties of an export (see Linker::read_properties()).
+    struct ObjectProperties
+    {
+        ObjectHeader header;                ///< UObject header preceding the properties.
+        std::vector<Property> properties;   ///< Tagged properties.
+        std::size_t end_offset = 0;         ///< Offset just past the "None" tag, relative to the export data.
+        Diagnostics diagnostics;            ///< Values that could not be decoded ("property.raw-value").
+    };
+
     /// @brief Resolves references across a set of packages.
     ///
     /// Packages are located through search paths (indexed by file stem, case-insensitively) and loaded lazily the
@@ -111,6 +122,30 @@ namespace UnrealLib
         /// @return nullptr if no such package is known or it failed to load (see diagnostics()).
         [[nodiscard]] const Package* find_package(std::string_view name);
 
+        /// @brief The file of the package named @p name known from the search paths (not loaded by this call).
+        [[nodiscard]] std::optional<std::filesystem::path> find_package_file(std::string_view name) const;
+
+        /// @brief Opens every package of the search paths once and records which ones carry forced exports of
+        ///        other packages (seek-free cooking: e.g. Dishonored ships no `Snd_Player` file, but many levels
+        ///        contain `Snd_Player` as a forced export). Afterwards an import into a package with no file resolves
+        ///        to such a copy. Packages are not kept loaded by the scan; it takes about as long as loading them all.
+        /// @return The number of forced-export packages found.
+        std::size_t index_forced_exports();
+
+        /// @brief Package name -> files that contain it as a forced export (see index_forced_exports()).
+        using ForcedExportIndex = std::unordered_map<std::string, std::vector<std::filesystem::path>,
+                                                     Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual>;
+
+        /// @brief The current forced-export index (empty until index_forced_exports() or set_forced_export_index()).
+        [[nodiscard]] const ForcedExportIndex& forced_export_index() const noexcept { return m_forced_exports; }
+
+        /// @brief Uses an index built by another Linker over the same files (the scan is expensive; share it).
+        void set_forced_export_index(ForcedExportIndex index);
+
+        /// @brief The texture file cache `<name>.tfc` known from the search paths (UE3 builds that store streamed
+        ///        texture mips in caches named by Texture2D's TextureFileCacheName, e.g. UDK).
+        [[nodiscard]] std::optional<std::filesystem::path> find_texture_file_cache(std::string_view name) const;
+
         /// @brief Number of packages currently loaded.
         [[nodiscard]] std::size_t loaded_count() const noexcept { return m_packages.size(); }
 
@@ -146,6 +181,22 @@ namespace UnrealLib
         /// @throws Error (NotFound) if the class hierarchy cannot be determined; SerializationError on bad data.
         [[nodiscard]] ObjectHeader read_header(ObjectRef object);
 
+        /// @brief Reads the UObject header and the tagged script properties of export @p object.
+        ///
+        /// The property owner is the export's class name. Class exports (null class) have no tagged properties: the
+        /// result then holds only the header and `end_offset == header.properties_offset`.
+        /// @param object The export to read.
+        /// @param schema Type information (nullptr: BuiltinPropertySchema).
+        /// @throws Error (NotFound) if the class hierarchy cannot be determined; SerializationError on bad tags.
+        [[nodiscard]] ObjectProperties read_properties(ObjectRef object, const PropertySchema* schema = nullptr);
+
+        /// @brief Reads the reflection data of export @p object (class, state, function, struct, enum, const,
+        ///        property or text buffer).
+        /// @param object The export to read.
+        /// @param schema Type information for struct default properties (nullptr: BuiltinPropertySchema).
+        /// @throws Error (InvalidArgument) if the export is not a reflection object; SerializationError on bad data.
+        [[nodiscard]] FieldObject read_field(ObjectRef object, const PropertySchema* schema = nullptr);
+
         /// @brief Load failures and search-path warnings.
         [[nodiscard]] const Diagnostics& diagnostics() const noexcept { return m_diagnostics; }
 
@@ -162,6 +213,9 @@ namespace UnrealLib
         std::unordered_map<std::string, const Package*, Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual> m_by_name;
         std::unordered_map<std::string, std::filesystem::path, Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual>
             m_index;
+        std::unordered_map<std::string, std::filesystem::path, Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual>
+            m_texture_caches;
+        ForcedExportIndex m_forced_exports;
         std::unordered_map<std::string, std::string, Text::CaseInsensitiveHash, Text::CaseInsensitiveEqual> m_failed;
         std::map<std::pair<const Package*, std::int32_t>, Resolution> m_cache;
         std::unordered_map<const Package*, std::unique_ptr<PackageLookup>> m_lookups;

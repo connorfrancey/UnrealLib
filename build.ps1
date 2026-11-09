@@ -4,7 +4,7 @@
     UnrealLib project manager wrapper (PowerShell on Windows, Linux or macOS).
 
 .DESCRIPTION
-    Runs scripts/manage.py with uv. All arguments are passed through unchanged and the working directory is kept,
+    Runs uelib.py with uv. All arguments are passed through unchanged and the working directory is kept,
     so relative paths (e.g. `./build.ps1 tool inspector Core.u`) refer to where you are.
 
 .EXAMPLE
@@ -24,5 +24,5 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     exit 127
 }
 
-& uv run --script (Join-Path $PSScriptRoot 'scripts/manage.py') @args
+& uv run --script (Join-Path $PSScriptRoot 'uelib.py') @args
 exit $LASTEXITCODE

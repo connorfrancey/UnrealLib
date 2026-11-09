@@ -38,6 +38,8 @@ function(unreallib_add_module name)
 
     set_target_properties(${target} PROPERTIES
             OUTPUT_NAME "UnrealLib${name}"
+            EXPORT_NAME "${name}"
+            DEBUG_POSTFIX "d"
             FOLDER "UnrealLib")
     unreallib_set_compiler_options(${target})
 

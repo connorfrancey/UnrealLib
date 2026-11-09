@@ -10,7 +10,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <iostream>
+#include <map>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -372,4 +375,150 @@ TEST_F(DifferentialTest, UpstreamBuildDetectionAgreesWithProfile)
         const bool upstream_me = e.upstream.at("upstream_build").get<std::string>() == "MirrorsEdge";
         EXPECT_EQ(detection.profile->id == "mirrorsedge-pc", upstream_me);
     }
+}
+
+namespace
+{
+    /// UnrealLib's property tags of @p ref in the dump schema (see UELibDump WriteObjects). Upstream's
+    /// UScriptStruct reads its struct defaults into the same Properties collection (replacing the leading, empty,
+    /// object property list), so for a ScriptStruct the defaults are compared.
+    json property_tags_json(Linker& linker, ObjectRef ref)
+    {
+        const Package& package = *ref.package;
+        json out = json::array();
+        const std::vector<Property> list = package.class_name(ref.index) == "ScriptStruct"
+                                               ? linker.read_field(ref).script_struct.value().defaults
+                                               : linker.read_properties(ref).properties;
+        for (const Property& p : list)
+        {
+            if (!p.tag) continue;
+            // Known upstream deviation: its PropertyType enum aliases DelegateProperty to StringProperty (both 7), and
+            // the dump's Enum.GetName reports "StringProperty". Map the stored type name to what upstream exposes.
+            std::string type = package.names().to_string(p.tag->type_name);
+            if (type == "DelegateProperty") type = "StringProperty";
+            json tag = {{"name", name_ref(p.tag->name)},
+                        {"type", type},
+                        {"size", p.tag->size},
+                        {"index", p.tag->array_index}};
+            if (p.tag->type == PropertyType::Struct && p.tag->struct_name) tag["struct"] = name_ref(*p.tag->struct_name);
+            if (p.tag->bool_value) tag["bool"] = *p.tag->bool_value;
+            out.push_back(std::move(tag));
+        }
+        return out;
+    }
+
+    /// [memory position, code] per token, sorted by position (code: opcode, or 0x10000 + native index).
+    json script_tokens_json(Linker& linker, ObjectRef ref, std::size_t& storage_size)
+    {
+        const Package& package = *ref.package;
+        const FieldObject field = linker.read_field(ref);
+        json out = json::array();
+        storage_size = 0;
+        if (!field.structure || field.structure->script_size <= 0) return out;
+        storage_size = field.structure->script_storage_size;
+        const TokenMap map = TokenMap::ue3(package.summary().file_version, &package.profile());
+        BytecodeOptions options;
+        options.token_map = &map;
+        options.name_count = static_cast<std::int32_t>(package.names().size());
+        options.none_index = package.names().find("None").value_or(-1);
+        BinaryReader reader(package.export_data(ref.index.export_index()), package.context());
+        reader.seek(field.structure->script_offset);
+        const Script script = decode_script(reader, static_cast<std::size_t>(field.structure->script_size), options);
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> tokens;
+        for (const Token& t : script.tokens)
+        {
+            tokens.emplace_back(t.memory_offset,
+                                t.kind == TokenKind::NativeFunction ? 0x10000u + t.native_index : t.opcode);
+        }
+        std::sort(tokens.begin(), tokens.end());
+        for (const auto& [position, code] : tokens) out.push_back(json::array({position, code}));
+        return out;
+    }
+}
+
+TEST_F(DifferentialTest, ObjectsMatch)
+{
+    // Script packages that upstream deserialized completely (uncompressed .u): property tags of every export and the
+    // bytecode token stream of every struct with script, for the objects upstream loaded without error.
+    std::size_t objects = 0, tag_lists = 0, scripts = 0, tokens = 0, packages = 0;
+    std::size_t upstream_failed = 0, read_where_upstream_failed = 0;
+    std::map<std::string, std::size_t> mismatches;
+    const auto mismatch = [&](const std::string& kind, const std::string& where, const std::string& detail) {
+        if (mismatches[kind]++ < 5) ADD_FAILURE() << kind << " differ for " << where << "\n" << detail;
+    };
+    for (const auto& e : m_entries)
+    {
+        if (!e.upstream.contains("objects")) continue;
+        ++packages;
+        Linker linker;
+        linker.add_search_path(fixture_dir());
+        const Package& package = linker.load(e.package);
+        for (const json& o : e.upstream.at("objects"))
+        {
+            const auto index = o.at("export").get<std::size_t>();
+            if (index >= package.exports().size()) continue;
+            const ObjectRef ref{&package, ObjectIndex::from_export(index)};
+            if (!o.at("ok").get<bool>())
+            {
+                // Upstream could not deserialize the object; record whether UnrealLib reads its properties.
+                ++upstream_failed;
+                try
+                {
+                    (void)property_tags_json(linker, ref);
+                    ++read_where_upstream_failed;
+                }
+                catch (const Error&)
+                {
+                }
+                continue;
+            }
+            const std::string where = linker.qualified_path(ref) + " (" + package.class_name(ref.index) + ")";
+            ++objects;
+
+            json ours;
+            try
+            {
+                ours = property_tags_json(linker, ref);
+            }
+            catch (const Error& error)
+            {
+                ours = std::string("error: ") + error.what();
+            }
+            if (ours != o.at("properties"))
+            {
+                mismatch("property tags", where, describe_diff(ours, o.at("properties")));
+                ++mismatches["property tags of a " + package.class_name(ref.index)];
+            }
+            ++tag_lists;
+
+            if (!o.contains("script")) continue;
+            json upstream_tokens = json::array();
+            for (const json& t : o.at("script").at("tokens")) upstream_tokens.push_back(json::array({t[0], t[2]}));
+            std::size_t storage = 0;
+            json our_tokens;
+            try
+            {
+                our_tokens = script_tokens_json(linker, ref, storage);
+            }
+            catch (const Error& error)
+            {
+                our_tokens = std::string("error: ") + error.what();
+            }
+            if (our_tokens != upstream_tokens) mismatch("bytecode tokens", where, describe_diff(our_tokens, upstream_tokens));
+            if (storage != o.at("script").at("storage_size").get<std::size_t>())
+            {
+                mismatch("script storage size", where,
+                         fmt::format("upstream {}, UnrealLib {}", o.at("script").at("storage_size").get<std::size_t>(),
+                                     storage));
+            }
+            ++scripts;
+            tokens += upstream_tokens.size();
+        }
+    }
+    std::cout << "  " << packages << " script packages, " << objects << " objects, " << tag_lists
+              << " property tag lists, " << scripts << " scripts (" << tokens << " tokens) compared; upstream failed on "
+              << upstream_failed << " objects, UnrealLib reads the properties of " << read_where_upstream_failed
+              << " of them\n";
+    for (const auto& [kind, n] : mismatches) std::cout << "  " << n << " mismatching " << kind << '\n';
+    if (packages == 0) GTEST_SKIP() << "no dump has objects (regenerate the UELib dumps)";
 }

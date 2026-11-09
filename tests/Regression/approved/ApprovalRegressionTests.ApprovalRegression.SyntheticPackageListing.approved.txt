@@ -1,0 +1,30 @@
+file_version     536
+licensee_version 43
+engine_version   3716
+cooker_version   60
+package_flags    0x00000008
+header_size      541
+compressed       false
+profile          mirrorsedge-pc
+
+names (7)
+  [0] None
+  [1] Core
+  [2] Class
+  [3] Package
+  [4] Object
+  [5] TestPkg
+  [6] MyObject
+
+imports (2)
+  [-1] Core : Core.Package
+  [-2] Core.Object : Core.Class
+
+exports (3)
+  [1] MyObject : Object
+       super null, outer null, flags 0x0007000400000000, serial 8 bytes @ 541
+  [2] MyObject.MyObject_2 : Object
+       super null, outer 1 (MyObject), flags 0x0000000000000000, serial 300 bytes @ 549
+  [3] TestPkg : Class
+       super null, outer null, flags 0x0000000000000000, serial 0 bytes @ 849
+
