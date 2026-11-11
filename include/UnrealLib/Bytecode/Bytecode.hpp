@@ -19,6 +19,7 @@
 namespace UnrealLib
 {
     class BinaryReader;
+    class BinaryWriter;
     struct GameProfile;
 
     /// @brief Kind of a bytecode token. Names follow upstream UELib token classes (without "Token").
@@ -152,8 +153,8 @@ namespace UnrealLib
         std::uint32_t memory_offset = 0;   ///< In-memory offset (the unit of jump targets and ScriptSize).
         ObjectIndex object;                ///< First object operand.
         ObjectIndex object2;               ///< Second object operand (StructMember's struct, Context's property).
-        FName name;                        ///< Name operand.
-        std::int32_t int_value = 0;        ///< IntConst; DebugInfo line.
+        FName name;                        ///< Name operand; LabelTable: its "None" terminator.
+        std::int32_t int_value = 0;        ///< IntConst; DebugInfo line; LabelTable: its "None" terminator's offset.
         std::array<std::int32_t, 3> ints{}; ///< RotationConst; DebugInfo (version, line, text pos).
         std::array<float, 3> floats{};     ///< FloatConst (floats[0]); VectorConst.
         std::string string_value;          ///< StringConst / UnicodeStringConst (UTF-8).
@@ -191,4 +192,16 @@ namespace UnrealLib
     /// @throws SerializationError on bad opcodes, malformed operands, or when the token stream does not end exactly
     ///         at @p memory_size.
     [[nodiscard]] Script decode_script(BinaryReader& reader, std::size_t memory_size, const BytecodeOptions& options);
+
+    /// @brief Writes @p script back as bytecode (the inverse of decode_script()), in @p writer's file version.
+    ///
+    /// Operands are written as they are, jump targets and skip sizes included: a script decoded and encoded unchanged
+    /// comes out byte-identical. Terminators the decoder consumes without keeping as children (EndFunctionParms,
+    /// EndParmValue, the LabelTable's "None" entry) are written from the token kinds; a DebugInfo after a call's
+    /// operands is its last child. Opcodes come from Token::opcode when @p token_map agrees with Token::kind, else
+    /// from the map (so a new token only needs its kind).
+    /// @return The in-memory size of what was written (the ScriptSize unit).
+    /// @throws Error (InvalidArgument) for a token missing operands, a kind the map has no opcode for, or text that
+    ///         doesn't fit the string constant's encoding.
+    std::size_t encode_script(BinaryWriter& writer, const Script& script, const TokenMap& token_map);
 }

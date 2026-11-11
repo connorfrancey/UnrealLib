@@ -28,6 +28,16 @@ std::cout << result.source;
 bool exact = result.clean();   // no placeholders, gotos or structure problems
 ```
 
+## Encoding
+
+`encode_script(writer, script, token_map)` is the inverse of `decode_script()`: it writes a token tree back as
+bytecode in the writer's file version and returns the in-memory size (ScriptSize units). Operands are written as
+they are, jump targets and skip sizes included, so a script decoded and encoded unchanged is byte-identical: every
+script of Mirror's Edge (13,770 scripts, 477,343 tokens over the whole corpus) round-trips
+(`MirrorsEdgeReflectionTests`). Terminators the decoder doesn't keep as children (EndFunctionParms, EndParmValue,
+the LabelTable's "None" entry, whose name and offset the LabelTable token keeps) are written from the kinds, and a
+token built from scratch only needs its kind: the opcode comes from the map.
+
 ## Classes
 
 `ScriptDecompiler::decompile_class(ref)` produces a whole `.uc` file. Pass a `ReflectionSchema` over the game's script

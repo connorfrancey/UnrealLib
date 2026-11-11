@@ -4,7 +4,8 @@
 // Invariants:
 //   * every reflection export (class, state, function, struct, enum, const, property, text buffer) deserializes
 //     and consumes its serialized data exactly;
-//   * every script's bytecode decodes to tokens that end exactly at ScriptSize, with the Mirror's Edge token map;
+//   * every script's bytecode decodes to tokens that end exactly at ScriptSize, with the Mirror's Edge token map,
+//     and encodes back (encode_script) to the same bytes and the same ScriptSize;
 //   * with the reflection schema, script-package properties decode without raw values, and the Core math struct
 //     layouts derived from reflection equal the built-in ones.
 
@@ -21,6 +22,9 @@
 #include <UnrealLib/Linker/Linker.hpp>
 #include <UnrealLib/Linker/ReflectionSchema.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
+#include <UnrealLib/Serialization/BinaryWriter.hpp>
+
+#include <algorithm>
 
 #include "Support/FixtureSupport.hpp"
 
@@ -37,6 +41,7 @@ namespace
         std::size_t scripts = 0;
         std::size_t tokens = 0;
         std::size_t script_failures = 0;
+        std::size_t encode_failures = 0;
         std::map<std::string, std::size_t> token_kinds;
     };
 
@@ -78,6 +83,24 @@ namespace
                         for (const Token& t : script.tokens) ++tally.token_kinds[std::string(to_string(t.kind))];
                         EXPECT_EQ(script.storage_size, field.structure->script_storage_size)
                             << linker.qualified_path(ref);
+
+                        // Round trip: the same bytes, the same in-memory size
+                        BinaryWriter writer(package.context());
+                        const std::size_t memory = encode_script(writer, script, map);
+                        const auto original = data.subspan(field.structure->script_offset, script.storage_size);
+                        const auto encoded = writer.data();
+                        if (memory != static_cast<std::size_t>(field.structure->script_size) ||
+                            !std::equal(encoded.begin(), encoded.end(), original.begin(), original.end()))
+                        {
+                            if (tally.encode_failures++ < 10)
+                            {
+                                const auto diff = std::mismatch(encoded.begin(), encoded.end(), original.begin(), original.end());
+                                ADD_FAILURE() << linker.qualified_path(ref) << ": encoded " << encoded.size() << " bytes ("
+                                              << memory << " in memory) vs " << original.size() << " ("
+                                              << field.structure->script_size << "), first difference at byte "
+                                              << (diff.first - encoded.begin());
+                            }
+                        }
                     }
                     catch (const Error& e)
                     {
@@ -103,7 +126,8 @@ namespace
     {
         for (const auto& [kind, count] : tally.kinds) std::cout << "  " << kind << ": " << count << '\n';
         std::cout << "  scripts: " << tally.scripts << ", tokens: " << tally.tokens
-                  << ", failures: " << tally.failures << ", script failures: " << tally.script_failures << '\n';
+                  << ", failures: " << tally.failures << ", script failures: " << tally.script_failures
+                  << ", encode failures: " << tally.encode_failures << '\n';
         ::testing::Test::RecordProperty("scripts", static_cast<int>(tally.scripts));
         ::testing::Test::RecordProperty("tokens", static_cast<int>(tally.tokens));
     }
@@ -126,6 +150,7 @@ TEST(MirrorsEdgeReflectionTests, ScriptPackageReflectionAndBytecode)
     report(tally);
     EXPECT_EQ(tally.failures, 0u);
     EXPECT_EQ(tally.script_failures, 0u);
+    EXPECT_EQ(tally.encode_failures, 0u);
     EXPECT_GT(tally.scripts, 1000u);
 }
 

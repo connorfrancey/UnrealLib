@@ -5,6 +5,7 @@
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Package/GameProfile.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
+#include <UnrealLib/Serialization/BinaryWriter.hpp>
 #include <UnrealLib/Utilities/Text.hpp>
 
 namespace UnrealLib
@@ -404,6 +405,9 @@ namespace UnrealLib
                         entry.offset = i32();
                         if (entry.name.index >= 0 && m_is_none(entry.name))
                         {
+                            // The terminator's own fields, kept so that encoding writes it back as it was
+                            tok().name = entry.name;
+                            tok().int_value = entry.offset;
                             break;
                         }
                         tok().labels.push_back(entry);
@@ -666,6 +670,529 @@ namespace UnrealLib
             std::size_t m_object_size = 4;
             Script m_script;
         };
+
+        // The inverse of Decoder: writes a token tree back as bytecode. Operand fields are written as they are (jump
+        // targets and skip sizes too); terminators that the decoder consumes without keeping (EndFunctionParms,
+        // EndParmValue, the LabelTable's "None" entry) are written from the token kinds.
+        class Encoder
+        {
+        public:
+            Encoder(BinaryWriter& writer, const Script& script, const TokenMap& map)
+                : m_writer(writer), m_script(script), m_map(map), m_version(writer.context().file_version)
+            {
+                m_name_size = m_version >= vNameSizeTo8 ? 8 : 4;
+                m_object_size = m_version >= vObjectSizeTo8 ? 8 : 4;
+                m_opcode_of.fill(-1);
+                for (std::size_t op = 0; op < m_map.kinds.size(); ++op)
+                {
+                    const auto k = static_cast<std::size_t>(m_map.kinds[op]);
+                    if (m_map.kinds[op] != TokenKind::Bad && m_opcode_of[k] < 0)
+                    {
+                        m_opcode_of[k] = static_cast<int>(op);
+                    }
+                }
+            }
+
+            std::size_t run()
+            {
+                for (const std::uint32_t s : m_script.statements)
+                {
+                    token(s, 0);
+                }
+                return m_memory;
+            }
+
+        private:
+            [[noreturn]] void fail(const std::string& message) const
+            {
+                throw Error(ErrorCode::InvalidArgument, "encode_script: " + message);
+            }
+
+            void u8(std::uint8_t v)
+            {
+                m_memory += 1;
+                m_writer.write_u8(v);
+            }
+            void u16(std::uint16_t v)
+            {
+                m_memory += 2;
+                m_writer.write_u16(v);
+            }
+            void i32(std::int32_t v)
+            {
+                m_memory += 4;
+                m_writer.write_i32(v);
+            }
+            void f32(float v)
+            {
+                m_memory += 4;
+                m_writer.write_f32(v);
+            }
+            void object(ObjectIndex o)
+            {
+                m_memory += m_object_size;
+                m_writer.write_i32(o.value);
+            }
+            void name(const FName& n)
+            {
+                m_memory += m_name_size;
+                write_fname(m_writer, n);
+            }
+
+            // The opcode of a kind: the token's own when the map agrees (a kind can have several), else the map's first
+            std::uint8_t opcode_for(TokenKind kind, std::uint8_t own) const
+            {
+                if (own < m_map.kinds.size() && m_map.kinds[own] == kind)
+                {
+                    return own;
+                }
+                const int op = m_opcode_of[static_cast<std::size_t>(kind)];
+                if (op < 0)
+                {
+                    fail(fmt::format("no opcode for {} in the token map", to_string(kind)));
+                }
+                return static_cast<std::uint8_t>(op);
+            }
+
+            void terminator(TokenKind kind) { u8(opcode_for(kind, 0xFF)); }
+
+            const Token& at(std::uint32_t index) const
+            {
+                if (index >= m_script.tokens.size())
+                {
+                    fail(fmt::format("token index {} out of range", index));
+                }
+                return m_script.tokens[index];
+            }
+
+            // Operand `i` of `t`, which must exist
+            void child(const Token& t, std::size_t i, std::size_t depth)
+            {
+                if (t.children.size() <= i)
+                {
+                    fail(fmt::format("{} has {} operands, needs at least {}", to_string(t.kind), t.children.size(), i + 1));
+                }
+                token(t.children[i], depth + 1);
+            }
+
+            // Call operands, then the terminator; a DebugInfo after them is kept as the last child (Decoder::maybe_debug)
+            void params(const Token& t, std::size_t depth, TokenKind end = TokenKind::EndFunctionParms)
+            {
+                std::size_t n = t.children.size();
+                const bool debug = end == TokenKind::EndFunctionParms && n > 0 && at(t.children.back()).kind == TokenKind::DebugInfo;
+                if (debug)
+                {
+                    --n;
+                }
+                for (std::size_t i = 0; i < n; ++i)
+                {
+                    token(t.children[i], depth + 1);
+                }
+                terminator(end);
+                if (debug)
+                {
+                    token(t.children.back(), depth + 1);
+                }
+            }
+
+            void array_method(const Token& t, std::size_t depth, std::size_t after_skip, std::uint16_t skip_version)
+            {
+                child(t, 0, depth);
+                if (m_version >= skip_version)
+                {
+                    u16(t.word);
+                }
+                for (std::size_t i = 0; i < after_skip; ++i)
+                {
+                    child(t, 1 + i, depth);
+                }
+                if (m_version >= vEndTokenAppendedToArrayIntrinsics)
+                {
+                    terminator(TokenKind::EndFunctionParms);
+                }
+                if (t.children.size() > 1 + after_skip)
+                {
+                    token(t.children[1 + after_skip], depth + 1); // DebugInfo
+                }
+            }
+
+            void native_opcode(std::uint16_t index)
+            {
+                if (index >= m_map.first_native && index < 0x100)
+                {
+                    u8(static_cast<std::uint8_t>(index));
+                    return;
+                }
+                const unsigned high = index >> 8u;
+                if (m_map.extended_native + high >= m_map.first_native)
+                {
+                    fail(fmt::format("native index {} can't be encoded", index));
+                }
+                u8(static_cast<std::uint8_t>(m_map.extended_native + high));
+                u8(static_cast<std::uint8_t>(index & 0xFFu));
+            }
+
+            void token(std::uint32_t index, std::size_t depth)
+            {
+                if (depth > 256)
+                {
+                    fail("expression nesting too deep");
+                }
+                const Token& t = at(index);
+                if (t.kind == TokenKind::NativeFunction)
+                {
+                    native_opcode(t.native_index);
+                    params(t, depth);
+                    return;
+                }
+                if (t.kind == TokenKind::Bad)
+                {
+                    fail("a Bad token can't be encoded");
+                }
+                u8(opcode_for(t.kind, t.opcode));
+                switch (t.kind)
+                {
+                case TokenKind::Bad:
+                case TokenKind::NativeFunction:
+                    break;
+
+                case TokenKind::LocalVariable:
+                case TokenKind::InstanceVariable:
+                case TokenKind::DefaultVariable:
+                case TokenKind::StateVariable:
+                case TokenKind::NativeParameter:
+                case TokenKind::OutVariable:
+                case TokenKind::ObjectConst:
+                    object(t.object);
+                    break;
+
+                case TokenKind::Return:
+                case TokenKind::GotoLabel:
+                case TokenKind::BoolVariable:
+                case TokenKind::DynamicArrayLength:
+                case TokenKind::InterfaceContext:
+                    child(t, 0, depth);
+                    break;
+
+                case TokenKind::Switch:
+                    if (m_version >= vSwitchExpressionField)
+                    {
+                        object(t.object);
+                    }
+                    if (m_version >= 536 && m_version <= 587)
+                    {
+                        u16(t.word2);
+                    }
+                    else
+                    {
+                        u8(static_cast<std::uint8_t>(t.word2));
+                    }
+                    child(t, 0, depth);
+                    break;
+
+                case TokenKind::Jump:
+                case TokenKind::FilterEditorOnly:
+                    u16(t.word);
+                    break;
+
+                case TokenKind::JumpIfNot:
+                    u16(t.word);
+                    child(t, 0, depth);
+                    break;
+
+                case TokenKind::Assert:
+                    u16(t.word);
+                    if (m_version >= vAssertDebugFlag)
+                    {
+                        u8(t.byte_value);
+                    }
+                    child(t, 0, depth);
+                    break;
+
+                case TokenKind::Case:
+                    u16(t.word);
+                    if (t.word != 0xFFFF)
+                    {
+                        child(t, 0, depth);
+                    }
+                    break;
+
+                case TokenKind::LabelTable:
+                    for (const LabelEntry& e : t.labels)
+                    {
+                        name(e.name);
+                        i32(e.offset);
+                    }
+                    name(t.name); // The "None" terminator, as decoded
+                    i32(t.int_value);
+                    break;
+
+                case TokenKind::EatReturnValue:
+                case TokenKind::ReturnNothing:
+                    if (m_version >= vEatReturnValueProperty)
+                    {
+                        object(t.object);
+                    }
+                    break;
+
+                case TokenKind::Let:
+                case TokenKind::LetBool:
+                case TokenKind::LetDelegate:
+                case TokenKind::DynamicArrayElement:
+                case TokenKind::ArrayElement:
+                    child(t, 0, depth);
+                    child(t, 1, depth);
+                    break;
+
+                case TokenKind::New:
+                    for (std::size_t i = 0; i < (m_version > vNewTemplate ? 5u : 4u); ++i)
+                    {
+                        child(t, i, depth);
+                    }
+                    break;
+
+                case TokenKind::Context:
+                case TokenKind::ClassContext:
+                    child(t, 0, depth);
+                    u16(t.word);
+                    if (m_version >= vContextPropertyAdded)
+                    {
+                        object(t.object2);
+                        u8(static_cast<std::uint8_t>(t.word2));
+                    }
+                    else if (m_version > 512)
+                    {
+                        u16(t.word2);
+                    }
+                    else
+                    {
+                        u8(static_cast<std::uint8_t>(t.word2));
+                    }
+                    child(t, 1, depth);
+                    break;
+
+                case TokenKind::MetaClassCast:
+                case TokenKind::DynamicCast:
+                case TokenKind::InterfaceCast:
+                    object(t.object);
+                    child(t, 0, depth);
+                    break;
+
+                case TokenKind::Skip:
+                    u16(t.word);
+                    child(t, 0, depth);
+                    break;
+
+                case TokenKind::VirtualFunction:
+                    if (m_version >= 178 && m_version <= 241)
+                    {
+                        u8(t.byte_value);
+                    }
+                    name(t.name);
+                    params(t, depth);
+                    break;
+
+                case TokenKind::FinalFunction:
+                    object(t.object);
+                    params(t, depth);
+                    break;
+
+                case TokenKind::GlobalFunction:
+                    name(t.name);
+                    params(t, depth);
+                    break;
+
+                case TokenKind::DelegateFunction:
+                    if (m_version >= vIsLocalAddedToDelegateFunction)
+                    {
+                        u8(t.byte_value);
+                    }
+                    object(t.object);
+                    name(t.name);
+                    params(t, depth);
+                    break;
+
+                case TokenKind::DelegateCmpEq:
+                case TokenKind::DelegateCmpNe:
+                case TokenKind::DelegateFunctionCmpEq:
+                case TokenKind::DelegateFunctionCmpNe:
+                    for (const std::uint32_t c : t.children)
+                    {
+                        token(c, depth + 1);
+                    }
+                    terminator(TokenKind::EndFunctionParms);
+                    break;
+
+                case TokenKind::IntConst: i32(t.int_value); break;
+                case TokenKind::FloatConst: f32(t.floats[0]); break;
+                case TokenKind::StringConst:
+                {
+                    const auto bytes = Text::utf8_to_cp1252(t.string_value);
+                    if (!bytes)
+                    {
+                        fail("a string constant has characters outside Windows-1252");
+                    }
+                    for (const std::uint8_t c : *bytes)
+                    {
+                        u8(c);
+                    }
+                    u8(0);
+                    break;
+                }
+                case TokenKind::UnicodeStringConst:
+                {
+                    const auto units = Text::utf8_to_utf16(t.string_value);
+                    if (!units)
+                    {
+                        fail("a unicode string constant is not valid UTF-8");
+                    }
+                    for (const char16_t c : *units)
+                    {
+                        u16(static_cast<std::uint16_t>(c));
+                    }
+                    u16(0);
+                    break;
+                }
+                case TokenKind::NameConst: name(t.name); break;
+                case TokenKind::RotationConst:
+                    for (const auto v : t.ints)
+                    {
+                        i32(v);
+                    }
+                    break;
+                case TokenKind::VectorConst:
+                    for (const auto v : t.floats)
+                    {
+                        f32(v);
+                    }
+                    break;
+                case TokenKind::ByteConst:
+                case TokenKind::IntConstByte: u8(t.byte_value); break;
+
+                case TokenKind::Iterator:
+                    child(t, 0, depth);
+                    u16(t.word);
+                    break;
+
+                case TokenKind::StructCmpEq:
+                case TokenKind::StructCmpNe:
+                    object(t.object);
+                    child(t, 0, depth);
+                    child(t, 1, depth);
+                    break;
+
+                case TokenKind::StructMember:
+                    object(t.object);
+                    if (m_version >= vStructReferenceAddedToStructMember)
+                    {
+                        object(t.object2);
+                    }
+                    if (m_version >= vIsCopyAddedToStructMember)
+                    {
+                        u8(t.byte_value);
+                    }
+                    if (m_version >= vIsModificationAddedToStructMember)
+                    {
+                        u8(t.byte_value2);
+                    }
+                    child(t, 0, depth);
+                    break;
+
+                case TokenKind::PrimitiveCast:
+                    u8(t.byte_value);
+                    child(t, 0, depth);
+                    break;
+
+                case TokenKind::DynamicArrayInsert:
+                case TokenKind::DynamicArrayRemove: array_method(t, depth, 2, 0xFFFF); break;
+                case TokenKind::DynamicArrayFind: array_method(t, depth, 1, vSkipSizeAddedToArrayFind); break;
+                case TokenKind::DynamicArrayFindStruct: array_method(t, depth, 2, vSkipSizeAddedToArrayFind); break;
+                case TokenKind::DynamicArrayAddItem:
+                case TokenKind::DynamicArrayRemoveItem:
+                case TokenKind::DynamicArraySort: array_method(t, depth, 1, vSkipSizeAddedToArrayIntrinsics); break;
+                case TokenKind::DynamicArrayInsertItem: array_method(t, depth, 2, vSkipSizeAddedToArrayIntrinsics); break;
+                case TokenKind::DynamicArrayAdd:
+                    child(t, 0, depth);
+                    child(t, 1, depth);
+                    if (m_version >= vEndTokenAppendedToArrayIntrinsics)
+                    {
+                        terminator(TokenKind::EndFunctionParms);
+                    }
+                    if (t.children.size() > 2)
+                    {
+                        token(t.children[2], depth + 1); // DebugInfo
+                    }
+                    break;
+
+                case TokenKind::DebugInfo:
+                    for (const auto v : t.ints)
+                    {
+                        i32(v);
+                    }
+                    u8(t.byte_value);
+                    break;
+
+                case TokenKind::DelegateProperty:
+                    name(t.name);
+                    if (m_version >= vDelegatePropertyObject)
+                    {
+                        object(t.object);
+                    }
+                    break;
+
+                case TokenKind::Conditional:
+                    child(t, 0, depth);
+                    u16(t.word);
+                    child(t, 1, depth);
+                    u16(t.word2);
+                    child(t, 2, depth);
+                    break;
+
+                case TokenKind::DefaultParameter:
+                    u16(t.word);
+                    params(t, depth, TokenKind::EndParmValue);
+                    break;
+
+                case TokenKind::InstanceDelegate: name(t.name); break;
+
+                case TokenKind::DynamicArrayIterator:
+                    child(t, 0, depth);
+                    child(t, 1, depth);
+                    u8(t.byte_value);
+                    child(t, 2, depth);
+                    u16(t.word);
+                    break;
+
+                case TokenKind::Stop:
+                case TokenKind::Nothing:
+                case TokenKind::EndParmValue:
+                case TokenKind::EndFunctionParms:
+                case TokenKind::Self:
+                case TokenKind::IntZero:
+                case TokenKind::IntOne:
+                case TokenKind::True:
+                case TokenKind::False:
+                case TokenKind::NoObject:
+                case TokenKind::IteratorPop:
+                case TokenKind::IteratorNext:
+                case TokenKind::EmptyDelegate:
+                case TokenKind::EmptyParm:
+                case TokenKind::Unresolved:
+                case TokenKind::UndefinedVariable:
+                case TokenKind::EndOfScript:
+                    break;
+                }
+            }
+
+            BinaryWriter& m_writer;
+            const Script& m_script;
+            const TokenMap& m_map;
+            std::uint16_t m_version;
+            std::size_t m_memory = 0;
+            std::size_t m_name_size = 8;
+            std::size_t m_object_size = 4;
+            std::array<int, 256> m_opcode_of{};
+        };
     }
 
     std::string_view to_string(TokenKind kind) noexcept
@@ -765,5 +1292,11 @@ namespace UnrealLib
         Decoder decoder(reader, memory_size, options);
         decoder.m_none_index = options.none_index;
         return decoder.run();
+    }
+
+    std::size_t encode_script(BinaryWriter& writer, const Script& script, const TokenMap& token_map)
+    {
+        Encoder encoder(writer, script, token_map);
+        return encoder.run();
     }
 }

@@ -16,6 +16,7 @@
 #include <UnrealLib/Decompiler/Statements.hpp>
 #include <UnrealLib/Reflection/Fields.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
+#include <UnrealLib/Serialization/BinaryWriter.hpp>
 
 using namespace UnrealLib;
 using namespace UnrealLib::Decompiler;
@@ -393,4 +394,61 @@ TEST(DecompilerFormatTests, CallSyntax)
     EXPECT_EQ(call_syntax(FunctionFlag::Operator, 0), CallSyntax::PostOperator);
     // PreOperator wins even with precedence 0 (upstream checks the post-operator rule first).
     EXPECT_EQ(call_syntax(FunctionFlag::Operator | FunctionFlag::PreOperator, 0), CallSyntax::PreOperator);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Encoding (encode_script, the inverse of decode_script). The corpus round trip is in MirrorsEdgeReflectionTests.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace
+{
+    std::vector<std::uint8_t> encode(const Script& script, std::size_t* memory = nullptr, std::uint16_t version = 536)
+    {
+        SerializationContext ctx;
+        ctx.file_version = version;
+        BinaryWriter writer(ctx);
+        const std::size_t m = encode_script(writer, script, TokenMap::ue3(version));
+        if (memory) *memory = m;
+        std::vector<std::uint8_t> out;
+        for (const std::byte b : writer.data()) out.push_back(static_cast<std::uint8_t>(b));
+        return out;
+    }
+}
+
+TEST(EncodeTests, AssembledCodeRoundTrips)
+{
+    Assembler a;
+    a.let_local(-3, opIntOne);          // local = 1
+    const auto skip = a.jump_if_not();  // if (true)
+    a.op(0x61);                         // extended native 0x161(...)
+    a.op(0x23);
+    a.op(opIntZero);
+    a.op(opEndFunctionParms);
+    a.patch(skip, a.here());
+    a.op(0x1D);                         // return 7 (IntConst)
+    a.i32(7);
+    const Script script = decode(a.bytes);
+    std::size_t memory = 0;
+    EXPECT_EQ(encode(script, &memory), a.bytes);
+    EXPECT_EQ(memory, a.bytes.size());
+}
+
+TEST(EncodeTests, NewTokensNeedOnlyTheirKind)
+{
+    // return 7; written from a hand-built tree: no opcodes set (0 is LocalVariable's), the map supplies them
+    Script script;
+    Token ret;
+    ret.kind = TokenKind::Return;
+    ret.children = {1};
+    Token seven;
+    seven.kind = TokenKind::IntConst;
+    seven.int_value = 7;
+    script.tokens = {ret, seven};
+    script.statements = {0};
+    std::size_t memory = 0;
+    EXPECT_EQ(encode(script, &memory), (std::vector<std::uint8_t>{opReturn, 0x1D, 7, 0, 0, 0}));
+    EXPECT_EQ(memory, 6u);
+
+    script.tokens[0].children.clear();  // A Return without its expression
+    EXPECT_THROW((void)encode(script), Error);
 }
