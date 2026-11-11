@@ -38,6 +38,16 @@ script of Mirror's Edge (13,770 scripts, 477,343 tokens over the whole corpus) r
 the LabelTable's "None" entry, whose name and offset the LabelTable token keeps) are written from the kinds, and a
 token built from scratch only needs its kind: the opcode comes from the map.
 
+`assemble_script(writer, script, token_map)` is for edited trees (tokens added, removed or resized): it lays the
+script out again first. Jump targets (Jump, JumpIfNot, Case, Iterator, DynamicArrayIterator, labels) follow the
+statement they pointed at, or `Token::target` (an index) for a new jump. Relative sizes are recomputed; measured over
+the corpus, they are: Conditional skips = the branch's size, Skip = operand + 1, DefaultParameter = token - 3, array
+intrinsics = the span after the field + 2, Context = operand 1's size, except in about 5,000 places where the compiler
+stored less. So a decoded token keeps its original difference from the span, and only a new token gets the formula.
+Checked over the whole corpus: unchanged scripts come out byte-identical, and every script edited (a statement in
+front, a parameter added to every native call) decodes, keeps its jumps on statements, and gives the original bytes
+back when the edits are taken out again.
+
 ## Classes
 
 `ScriptDecompiler::decompile_class(ref)` produces a whole `.uc` file. Pass a `ReflectionSchema` over the game's script

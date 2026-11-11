@@ -6,6 +6,9 @@
 //     and consumes its serialized data exactly;
 //   * every script's bytecode decodes to tokens that end exactly at ScriptSize, with the Mirror's Edge token map,
 //     and encodes back (encode_script) to the same bytes and the same ScriptSize;
+//   * assemble_script lays scripts out again correctly: unchanged, byte-identical; edited (a statement in front, a
+//     marker parameter added to every native call: every jump and enclosing skip moves), the result decodes, its jumps
+//     land on statements, and taking the edits out again gives the original bytes.
 //   * with the reflection schema, script-package properties decode without raw values, and the Core math struct
 //     layouts derived from reflection equal the built-in ones.
 
@@ -42,8 +45,12 @@ namespace
         std::size_t tokens = 0;
         std::size_t script_failures = 0;
         std::size_t encode_failures = 0;
+        std::size_t assemble_failures = 0;
         std::map<std::string, std::size_t> token_kinds;
     };
+
+    void check_assemble(const std::string& what, const Package& package, const Script& script, const TokenMap& map,
+                        std::span<const std::byte> original, const BytecodeOptions& options, ReflectionTally& tally);
 
     void check_package(Linker& linker, const Package& package, ReflectionTally& tally)
     {
@@ -101,6 +108,7 @@ namespace
                                               << (diff.first - encoded.begin());
                             }
                         }
+                        check_assemble(linker.qualified_path(ref), package, script, map, original, options, tally);
                     }
                     catch (const Error& e)
                     {
@@ -122,12 +130,77 @@ namespace
         }
     }
 
+    // See the invariants above. Failures are counted in tally.assemble_failures (the first few reported).
+    void check_assemble(const std::string& what, const Package& package, const Script& script, const TokenMap& map,
+                        std::span<const std::byte> original, const BytecodeOptions& options, ReflectionTally& tally)
+    {
+        constexpr std::int32_t marker = 0x7EADBEEF;
+        const auto fail = [&](const std::string& why) {
+            if (tally.assemble_failures++ < 10) ADD_FAILURE() << what << ": assemble: " << why;
+        };
+        const auto bytes_of = [](const BinaryWriter& w) { return std::vector<std::byte>(w.data().begin(), w.data().end()); };
+        try
+        {
+            BinaryWriter same(package.context());
+            assemble_script(same, script, map);
+            if (bytes_of(same) != std::vector<std::byte>(original.begin(), original.end())) return fail("unchanged script differs");
+
+            // Edit: a Nothing statement in front, a marker IntConst as the last parameter of every native call
+            Script edited = script;
+            Token nothing;
+            nothing.kind = TokenKind::Nothing;
+            edited.tokens.push_back(nothing);
+            edited.statements.insert(edited.statements.begin(), static_cast<std::uint32_t>(edited.tokens.size() - 1));
+            for (std::size_t i = 0; i < script.tokens.size(); ++i)
+            {
+                if (edited.tokens[i].kind != TokenKind::NativeFunction) continue;
+                Token m;
+                m.kind = TokenKind::IntConst;
+                m.int_value = marker;
+                edited.tokens.push_back(m);
+                auto& kids = edited.tokens[i].children;
+                const bool debug = !kids.empty() && edited.tokens[kids.back()].kind == TokenKind::DebugInfo;
+                kids.insert(debug ? kids.end() - 1 : kids.end(), static_cast<std::uint32_t>(edited.tokens.size() - 1));
+            }
+            BinaryWriter w(package.context());
+            const std::size_t memory = assemble_script(w, edited, map);
+            const auto bytes = bytes_of(w);
+            BinaryReader r(std::span<const std::byte>(bytes), package.context());
+            const Script again = decode_script(r, memory, options);
+            if (again.statements.size() != script.statements.size() + 1) return fail("statement count changed");
+            for (const Token& t : again.tokens)
+            {
+                const bool jump = t.kind == TokenKind::Jump || t.kind == TokenKind::JumpIfNot || t.kind == TokenKind::Iterator ||
+                                  t.kind == TokenKind::DynamicArrayIterator || (t.kind == TokenKind::Case && t.word != 0xFFFF);
+                if (!jump || t.word == memory) continue;
+                if (std::none_of(again.statements.begin(), again.statements.end(),
+                                 [&](std::uint32_t st) { return again.tokens[st].memory_offset == t.word; }))
+                    return fail(std::string(to_string(t.kind)) + " no longer lands on a statement");
+            }
+
+            // Undo: drop the first statement and the markers, lay out again
+            Script undone = again;
+            undone.statements.erase(undone.statements.begin());
+            for (Token& t : undone.tokens)
+                std::erase_if(t.children, [&](std::uint32_t c) {
+                    return undone.tokens[c].kind == TokenKind::IntConst && undone.tokens[c].int_value == marker;
+                });
+            BinaryWriter back(package.context());
+            assemble_script(back, undone, map);
+            if (bytes_of(back) != std::vector<std::byte>(original.begin(), original.end())) fail("edited and undone differs");
+        }
+        catch (const Error& e)
+        {
+            fail(e.what());
+        }
+    }
+
     void report(const ReflectionTally& tally)
     {
         for (const auto& [kind, count] : tally.kinds) std::cout << "  " << kind << ": " << count << '\n';
         std::cout << "  scripts: " << tally.scripts << ", tokens: " << tally.tokens
                   << ", failures: " << tally.failures << ", script failures: " << tally.script_failures
-                  << ", encode failures: " << tally.encode_failures << '\n';
+                  << ", encode failures: " << tally.encode_failures << ", assemble failures: " << tally.assemble_failures << '\n';
         ::testing::Test::RecordProperty("scripts", static_cast<int>(tally.scripts));
         ::testing::Test::RecordProperty("tokens", static_cast<int>(tally.tokens));
     }
@@ -151,6 +224,7 @@ TEST(MirrorsEdgeReflectionTests, ScriptPackageReflectionAndBytecode)
     EXPECT_EQ(tally.failures, 0u);
     EXPECT_EQ(tally.script_failures, 0u);
     EXPECT_EQ(tally.encode_failures, 0u);
+    EXPECT_EQ(tally.assemble_failures, 0u);
     EXPECT_GT(tally.scripts, 1000u);
 }
 

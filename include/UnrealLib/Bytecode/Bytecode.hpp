@@ -151,6 +151,7 @@ namespace UnrealLib
         std::uint32_t offset = 0;          ///< Storage offset within the script.
         std::uint32_t size = 0;            ///< Storage size including children.
         std::uint32_t memory_offset = 0;   ///< In-memory offset (the unit of jump targets and ScriptSize).
+        std::uint32_t memory_size = 0;     ///< In-memory size with operands and terminators (0: not decoded, a new token).
         ObjectIndex object;                ///< First object operand.
         ObjectIndex object2;               ///< Second object operand (StructMember's struct, Context's property).
         FName name;                        ///< Name operand; LabelTable: its "None" terminator.
@@ -164,6 +165,10 @@ namespace UnrealLib
         std::uint8_t byte_value2 = 0;      ///< StructMember IsModification.
         std::vector<LabelEntry> labels;    ///< LabelTable entries (without the terminating "None").
         std::vector<std::uint32_t> children; ///< Indices of operand tokens in Script::tokens, in stream order.
+        /// assemble_script(): the token a jump-like token (Jump, JumpIfNot, Case, Iterator, ...) goes to, by index;
+        /// end_of_script for the end; -1: `word` is an original memory offset (decoded tokens).
+        std::int32_t target = -1;
+        static constexpr std::int32_t end_of_script = -2;
     };
 
     /// @brief A decoded script.
@@ -204,4 +209,16 @@ namespace UnrealLib
     /// @throws Error (InvalidArgument) for a token missing operands, a kind the map has no opcode for, or text that
     ///         doesn't fit the string constant's encoding.
     std::size_t encode_script(BinaryWriter& writer, const Script& script, const TokenMap& token_map);
+
+    /// @brief Like encode_script(), after laying the script out again: for a token tree that was edited (tokens added,
+    ///        removed or changed size).
+    ///
+    /// Jump targets (Jump, JumpIfNot, Case, Iterator, DynamicArrayIterator, FilterEditorOnly, labels) follow the token
+    /// they pointed at: an original memory offset (`word`) of a decoded token, or Token::target. Relative sizes
+    /// (Context and Skip skips, Conditional branches, DefaultParameter sizes, array intrinsics' skips) are recomputed:
+    /// a decoded token keeps its original difference from the span it covers (the compiler's own values differ from
+    /// the plain size in places), a new one gets the size. Unchanged scripts come out byte-identical.
+    /// @return The in-memory size of what was written.
+    /// @throws Error (InvalidArgument) as encode_script(), and for a jump to where no token is, or a size over 16 bits.
+    std::size_t assemble_script(BinaryWriter& writer, const Script& script, const TokenMap& token_map);
 }

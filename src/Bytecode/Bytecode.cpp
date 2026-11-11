@@ -2,6 +2,8 @@
 
 #include <fmt/format.h>
 
+#include <unordered_map>
+
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Package/GameProfile.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
@@ -650,6 +652,7 @@ namespace UnrealLib
 
                 Token& t = m_script.tokens[index];
                 t.size = static_cast<std::uint32_t>(m_reader.position() - start);
+                t.memory_size = static_cast<std::uint32_t>(m_memory - start_memory);
                 return index;
             }
 
@@ -700,6 +703,13 @@ namespace UnrealLib
                     token(s, 0);
                 }
                 return m_memory;
+            }
+
+            // Where each token starts and ends in memory, filled while encoding (assemble_script's layout)
+            void record(std::vector<std::int64_t>* starts, std::vector<std::int64_t>* ends)
+            {
+                m_starts = starts;
+                m_ends = ends;
             }
 
         private:
@@ -839,6 +849,16 @@ namespace UnrealLib
                     fail("expression nesting too deep");
                 }
                 const Token& t = at(index);
+                if (m_starts) (*m_starts)[index] = static_cast<std::int64_t>(m_memory);
+                struct End
+                {
+                    Encoder& e;
+                    std::uint32_t i;
+                    ~End()
+                    {
+                        if (e.m_ends) (*e.m_ends)[i] = static_cast<std::int64_t>(e.m_memory);
+                    }
+                } end{*this, index};
                 if (t.kind == TokenKind::NativeFunction)
                 {
                     native_opcode(t.native_index);
@@ -1192,6 +1212,8 @@ namespace UnrealLib
             std::size_t m_name_size = 8;
             std::size_t m_object_size = 4;
             std::array<int, 256> m_opcode_of{};
+            std::vector<std::int64_t>* m_starts = nullptr;
+            std::vector<std::int64_t>* m_ends = nullptr;
         };
     }
 
@@ -1297,6 +1319,175 @@ namespace UnrealLib
     std::size_t encode_script(BinaryWriter& writer, const Script& script, const TokenMap& token_map)
     {
         Encoder encoder(writer, script, token_map);
+        return encoder.run();
+    }
+
+    namespace
+    {
+        // Memory layout of an encoded script: where each token starts and ends (operands and terminators included)
+        struct Layout
+        {
+            std::vector<std::int64_t> start, end;
+            std::size_t total = 0;
+        };
+
+        Layout lay_out(const Script& script, const TokenMap& map, const SerializationContext& context)
+        {
+            BinaryWriter scratch(context);
+            Encoder encoder(scratch, script, map);
+            Layout layout;
+            layout.start.assign(script.tokens.size(), -1);
+            layout.end.assign(script.tokens.size(), -1);
+            encoder.record(&layout.start, &layout.end);
+            layout.total = encoder.run();
+            return layout;
+        }
+
+        bool decoded(const Token& t) { return t.memory_size != 0; }
+    }
+
+    std::size_t assemble_script(BinaryWriter& writer, const Script& script, const TokenMap& token_map)
+    {
+        const Layout layout = lay_out(script, token_map, writer.context());
+        const auto size = [&](std::uint32_t index) -> std::int64_t {
+            if (index >= script.tokens.size() || layout.start[index] < 0)
+            {
+                throw Error(ErrorCode::InvalidArgument, fmt::format("assemble_script: token {} is not in the script", index));
+            }
+            return layout.end[index] - layout.start[index];
+        };
+        const auto kid = [&](const Token& t, std::size_t i) -> std::uint32_t {
+            if (i >= t.children.size())
+            {
+                throw Error(ErrorCode::InvalidArgument,
+                            fmt::format("assemble_script: {} has {} operands, needs at least {}", to_string(t.kind),
+                                        t.children.size(), i + 1));
+            }
+            return t.children[i];
+        };
+        const auto word = [](std::int64_t v, const char* what) -> std::uint16_t {
+            if (v < 0 || v > 0xFFFE)
+            {
+                throw Error(ErrorCode::InvalidArgument, fmt::format("assemble_script: {} {} doesn't fit 16 bits", what, v));
+            }
+            return static_cast<std::uint16_t>(v);
+        };
+
+        // Old memory offsets of the decoded tokens -> where they are now (jump targets); the old end -> the new end
+        std::unordered_map<std::uint32_t, std::int64_t> moved;
+        std::size_t old_total = script.memory_size;
+        for (std::size_t i = 0; i < script.tokens.size(); ++i)
+        {
+            if (decoded(script.tokens[i]) && layout.start[i] >= 0)
+            {
+                moved.emplace(script.tokens[i].memory_offset, layout.start[i]);
+            }
+        }
+        const auto target = [&](const Token& t, std::uint32_t old_offset) -> std::uint16_t {
+            if (t.target >= 0)
+            {
+                const auto to = static_cast<std::size_t>(t.target);
+                if (to >= layout.start.size() || layout.start[to] < 0)
+                {
+                    throw Error(ErrorCode::InvalidArgument, "assemble_script: a jump target is not in the script");
+                }
+                return word(layout.start[to], "jump target");
+            }
+            if (t.target == Token::end_of_script || (old_total != 0 && old_offset == old_total))
+            {
+                return word(static_cast<std::int64_t>(layout.total), "jump target");
+            }
+            const auto it = moved.find(old_offset);
+            if (it == moved.end())
+            {
+                throw Error(ErrorCode::InvalidArgument,
+                            fmt::format("assemble_script: {} jumps to memory offset 0x{:X}, where no token was",
+                                        to_string(t.kind), old_offset));
+            }
+            return word(it->second, "jump target");
+        };
+        // A relative size: a decoded token keeps its original difference from the span (the compiler's own values
+        // differ from the plain size in places), a new one gets `fresh`
+        const auto relative = [&](const Token& t, std::uint16_t old_value, std::int64_t old_span, std::int64_t new_span,
+                                  std::int64_t fresh, const char* what) -> std::uint16_t {
+            return decoded(t) ? word(static_cast<std::int64_t>(old_value) + (new_span - old_span), what) : word(fresh, what);
+        };
+        const std::uint16_t version = writer.context().file_version;
+
+        Script out = script;
+        for (std::size_t i = 0; i < out.tokens.size(); ++i)
+        {
+            if (layout.start[i] < 0)
+            {
+                continue; // Not reached from the statements (a terminator the decoder kept aside)
+            }
+            Token& t = out.tokens[i];
+            const Token& o = script.tokens[i];
+            switch (t.kind)
+            {
+            case TokenKind::Jump:
+            case TokenKind::JumpIfNot:
+            case TokenKind::Iterator:
+            case TokenKind::DynamicArrayIterator:
+            case TokenKind::FilterEditorOnly:
+                t.word = target(o, o.word);
+                break;
+            case TokenKind::Case:
+                if (o.word != 0xFFFF || o.target >= 0) t.word = target(o, o.word);
+                break;
+            case TokenKind::LabelTable:
+                for (LabelEntry& l : t.labels)
+                {
+                    l.offset = target(Token{}, static_cast<std::uint32_t>(l.offset));
+                }
+                break;
+            case TokenKind::Context:
+            case TokenKind::ClassContext:
+            {
+                const auto c = kid(o, 1);
+                t.word = relative(o, o.word, script.tokens[c].memory_size, size(c), size(c), "context skip");
+                break;
+            }
+            case TokenKind::Skip:
+            {
+                const auto c = kid(o, 0);
+                t.word = relative(o, o.word, script.tokens[c].memory_size, size(c), size(c) + 1, "skip");
+                break;
+            }
+            case TokenKind::Conditional:
+            {
+                const auto a = kid(o, 1), b = kid(o, 2);
+                t.word = relative(o, o.word, script.tokens[a].memory_size, size(a), size(a), "conditional skip");
+                t.word2 = relative(o, o.word2, script.tokens[b].memory_size, size(b), size(b), "conditional skip");
+                break;
+            }
+            case TokenKind::DefaultParameter:
+                t.word = word(size(static_cast<std::uint32_t>(i)) - 3, "default parameter size");
+                break;
+            case TokenKind::DynamicArrayFind:
+            case TokenKind::DynamicArrayFindStruct:
+            case TokenKind::DynamicArrayAddItem:
+            case TokenKind::DynamicArrayRemoveItem:
+            case TokenKind::DynamicArrayInsertItem:
+            case TokenKind::DynamicArraySort:
+            {
+                const bool has_skip = t.kind == TokenKind::DynamicArrayFind || t.kind == TokenKind::DynamicArrayFindStruct
+                                          ? version >= vSkipSizeAddedToArrayFind
+                                          : version >= vSkipSizeAddedToArrayIntrinsics;
+                if (!has_skip) break;
+                // The span after the skip field: from the end of the array operand to the end of the token
+                const auto a = kid(o, 0);
+                const std::int64_t new_span = layout.end[i] - (layout.end[a] + 2);
+                const std::int64_t old_span = static_cast<std::int64_t>(o.memory_size) - (1 + script.tokens[a].memory_size + 2);
+                t.word = relative(o, o.word, old_span, new_span, new_span + 2, "array skip");
+                break;
+            }
+            default:
+                break;
+            }
+        }
+        out.memory_size = layout.total;
+        Encoder encoder(writer, out, token_map);
         return encoder.run();
     }
 }

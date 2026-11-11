@@ -452,3 +452,42 @@ TEST(EncodeTests, NewTokensNeedOnlyTheirKind)
     script.tokens[0].children.clear();  // A Return without its expression
     EXPECT_THROW((void)encode(script), Error);
 }
+
+TEST(EncodeTests, AssembleFollowsJumpsWhenCodeMoves)
+{
+    // if (true) { 1; } 0;  ->  insert a statement before the `if`: the JumpIfNot target moves with its statement
+    Assembler a;
+    const auto skip = a.jump_if_not();
+    a.statement();
+    a.patch(skip, a.here());
+    a.statement0();
+    Script script = decode(a.bytes);
+    Token nothing;
+    nothing.kind = TokenKind::Nothing;
+    script.tokens.push_back(nothing);
+    script.statements.insert(script.statements.begin(), static_cast<std::uint32_t>(script.tokens.size() - 1));
+
+    SerializationContext ctx;
+    ctx.file_version = 536;
+    BinaryWriter writer(ctx);
+    const std::size_t memory = assemble_script(writer, script, TokenMap::ue3(536));
+    EXPECT_EQ(memory, a.bytes.size() + 1);
+    std::vector<std::uint8_t> out;
+    for (const std::byte b : writer.data()) out.push_back(static_cast<std::uint8_t>(b));
+    std::vector<std::uint8_t> want{opNothing};
+    want.insert(want.end(), a.bytes.begin(), a.bytes.end());
+    want[2] = static_cast<std::uint8_t>(want[2] + 1);   // The JumpIfNot target, one byte further
+    EXPECT_EQ(out, want);
+
+    // A new jump by token index: to the IntZero statement
+    Token jump;
+    jump.kind = TokenKind::Jump;
+    jump.target = static_cast<std::int32_t>(script.statements.back());
+    script.tokens.push_back(jump);
+    script.statements.insert(script.statements.begin(), static_cast<std::uint32_t>(script.tokens.size() - 1));
+    BinaryWriter w2(ctx);
+    assemble_script(w2, script, TokenMap::ue3(536));
+    const auto data = w2.data();
+    EXPECT_EQ(static_cast<std::uint8_t>(data[0]), opJump);
+    EXPECT_EQ(static_cast<std::uint8_t>(data[1]), static_cast<std::uint8_t>(3 + 1 + a.bytes.size() - 1));   // past jump, nothing, if
+}
