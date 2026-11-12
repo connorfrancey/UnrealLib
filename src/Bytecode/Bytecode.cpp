@@ -1438,13 +1438,25 @@ namespace UnrealLib
             case TokenKind::LabelTable:
                 for (LabelEntry& l : t.labels)
                 {
-                    l.offset = target(Token{}, static_cast<std::uint32_t>(l.offset));
+                    Token by_index;
+                    by_index.target = l.target;
+                    l.offset = target(by_index, static_cast<std::uint32_t>(l.offset));
                 }
                 break;
             case TokenKind::Context:
             case TokenKind::ClassContext:
             {
                 const auto c = kid(o, 1);
+                if (o.skip_to >= 0)
+                {
+                    t.word = word(layout.start[static_cast<std::size_t>(o.skip_to)] - layout.start[c], "context skip");
+                    break;
+                }
+                if (o.skip_size >= 0)
+                {
+                    t.word = word(o.skip_size, "context skip");
+                    break;
+                }
                 t.word = relative(o, o.word, script.tokens[c].memory_size, size(c), size(c), "context skip");
                 break;
             }
@@ -1479,7 +1491,7 @@ namespace UnrealLib
                 const auto a = kid(o, 0);
                 const std::int64_t new_span = layout.end[i] - (layout.end[a] + 2);
                 const std::int64_t old_span = static_cast<std::int64_t>(o.memory_size) - (1 + script.tokens[a].memory_size + 2);
-                t.word = relative(o, o.word, old_span, new_span, new_span + 2, "array skip");
+                t.word = relative(o, o.word, old_span, new_span, new_span, "array skip");   // Every Mirror's Edge one: the span
                 break;
             }
             default:

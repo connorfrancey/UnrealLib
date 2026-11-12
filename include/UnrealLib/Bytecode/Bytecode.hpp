@@ -140,6 +140,7 @@ namespace UnrealLib
     {
         FName name;              ///< Label name.
         std::int32_t offset = 0; ///< Code offset.
+        std::int32_t target = -1; ///< assemble_script(): the token the label marks, by index (-1: `offset` is original)
     };
 
     /// @brief One decoded token. Operands that a kind does not use keep their defaults.
@@ -169,6 +170,12 @@ namespace UnrealLib
         /// end_of_script for the end; -1: `word` is an original memory offset (decoded tokens).
         std::int32_t target = -1;
         static constexpr std::int32_t end_of_script = -2;
+        /// assemble_script(), Context/ClassContext built from scratch: the skip reaches this token (by index) instead of
+        /// covering the member (a context around an iterator call skips the whole loop when the object is none). -1: none.
+        std::int32_t skip_to = -1;
+        /// assemble_script(), Context/ClassContext built from scratch: this exact skip instead of a computed one (the
+        /// UE3 compiler stores 5, the size of the `Outer` variable, for every context on `Outer`). -1: computed.
+        std::int32_t skip_size = -1;
     };
 
     /// @brief A decoded script.

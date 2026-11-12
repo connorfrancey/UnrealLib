@@ -1,6 +1,6 @@
 # ----------------------------------------------------------------------------------------------------------------------
 # UnrealLib modules. Dependency order (no cycles):
-#   Core -> Utilities -> Serialization -> Names -> Package -> Objects, Properties -> Linker -> Decompiler, Assets; Package, Properties -> Writer; Assets, Linker, Writer -> T3D
+#   Core -> Utilities -> Serialization -> Names -> Package -> Objects, Properties -> Linker -> Decompiler, Compiler, Assets; Package, Properties -> Writer; Assets, Linker, Writer -> T3D
 # Sources are listed explicitly; add new files here when a module grows.
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -107,6 +107,17 @@ unreallib_add_module(Decompiler
             UnrealLib::Linker
             UnrealLib::Reflection)
 
+unreallib_add_module(Compiler
+        SOURCES
+            Compiler/Ast.hpp
+            Compiler/Compiler.cpp
+            Compiler/Parser.cpp
+            Compiler/Parser.hpp
+        PUBLIC_DEPS
+            UnrealLib::Bytecode
+            UnrealLib::Linker
+            UnrealLib::Reflection)
+
 unreallib_add_module(Assets
         SOURCES
             Assets/Animation.cpp
@@ -156,6 +167,7 @@ target_link_libraries(unreallib INTERFACE
         UnrealLib::Reflection
         UnrealLib::Linker
         UnrealLib::Decompiler
+        UnrealLib::Compiler
         UnrealLib::Assets
         UnrealLib::Writer
         UnrealLib::T3D)
