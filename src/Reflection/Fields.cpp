@@ -6,6 +6,7 @@
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Names/NameTable.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
+#include <UnrealLib/Serialization/BinaryWriter.hpp>
 #include <UnrealLib/Utilities/Text.hpp>
 
 namespace UnrealLib
@@ -472,5 +473,198 @@ namespace UnrealLib
         }
         out.end_offset = reader.position();
         return out;
+    }
+
+    namespace
+    {
+        void write_name_list(BinaryWriter& writer, const std::vector<FName>& names)
+        {
+            writer.write_i32(static_cast<std::int32_t>(names.size()));
+            for (const FName& n : names) write_fname(writer, n);
+        }
+
+        void write_name_object_map(BinaryWriter& writer, const std::vector<std::pair<FName, ObjectIndex>>& map)
+        {
+            writer.write_i32(static_cast<std::int32_t>(map.size()));
+            for (const auto& [key, value] : map)
+            {
+                write_fname(writer, key);
+                writer.write_index(value.value);
+            }
+        }
+    }
+
+    void write_field(BinaryWriter& writer, const FieldObject& field, std::span<const std::byte> script,
+                     const ObjectHeaderInput& input, const FieldWriteOptions& options)
+    {
+        const std::uint16_t v = writer.context().file_version;
+        if (v < vUE3)
+        {
+            throw UnsupportedError("write_field: versions before 178 are not supported", writer.position());
+        }
+        write_object_header(writer, field.header, input);
+        if (!input.is_class)
+        {
+            write_properties(writer, field.properties, options.none);
+        }
+        if (field.kind == FieldKind::TextBuffer)
+        {
+            const TextBufferData text = field.text_buffer.value_or(TextBufferData{});
+            writer.write_u32(text.top);
+            writer.write_u32(text.pos);
+            writer.write_fstring(text.text);
+            return;
+        }
+
+        // UField
+        if (v < vSuperReferenceMovedToUStruct)
+        {
+            writer.write_index(field.field.super.value);
+        }
+        writer.write_index(field.field.next.value);
+
+        switch (field.kind)
+        {
+        case FieldKind::Enum: write_name_list(writer, field.enum_names); break;
+        case FieldKind::Const: writer.write_fstring(field.const_value.value_or(FString{})); break;
+        case FieldKind::Property:
+        {
+            const PropertyData& data = field.property.value();
+            writer.write_i32(data.array_dim);
+            if (v >= vPropertyFlagsSizeExpandedTo64Bits) writer.write_u64(data.flags);
+            else writer.write_u32(static_cast<std::uint32_t>(data.flags));
+            if (!options.console_cooked)
+            {
+                write_fname(writer, data.category.value_or(FName{}));
+                if (v >= vAddedArrayEnumToUProperty) writer.write_index(data.array_enum.value);
+            }
+            if ((data.flags & PropertyFlag::Net) != 0) writer.write_u16(data.rep_offset.value_or(0));
+            switch (data.type)
+            {
+            case PropertyType::Byte:
+            case PropertyType::Object:
+            case PropertyType::Component:
+            case PropertyType::Interface:
+            case PropertyType::Struct:
+            case PropertyType::Array: writer.write_index(data.reference.value); break;
+            case PropertyType::Class:
+            case PropertyType::Map:
+                writer.write_index(data.reference.value);
+                writer.write_index(data.reference2.value);
+                break;
+            case PropertyType::FixedArray:
+                writer.write_index(data.reference.value);
+                writer.write_index(data.fixed_count);
+                break;
+            case PropertyType::Delegate:
+                writer.write_index(data.reference.value);
+                if (v >= vAddedDelegateSourceToUDelegateProperty)
+                {
+                    if (v < vChangedDelegateSourceFromNameToObject) write_fname(writer, FName{});
+                    else writer.write_index(data.reference2.value);
+                }
+                break;
+            default: break;
+            }
+            break;
+        }
+        case FieldKind::Struct:
+        case FieldKind::ScriptStruct:
+        case FieldKind::Function:
+        case FieldKind::State:
+        case FieldKind::Class:
+        {
+            const StructData& data = field.structure.value();
+            if (v >= vSuperReferenceMovedToUStruct) writer.write_index(field.field.super.value);
+            if (!options.console_cooked) writer.write_index(data.script_text.value);
+            writer.write_index(data.children.value);
+            if (v >= vAddedCppTextToUStruct && !options.console_cooked) writer.write_index(data.cpp_text.value);
+            if (!options.console_cooked)
+            {
+                writer.write_i32(data.line);
+                writer.write_i32(data.text_pos);
+            }
+            writer.write_i32(data.script_size);
+            if (v >= vAddedDataScriptSizeToUStruct) writer.write_i32(static_cast<std::int32_t>(script.size()));
+            writer.write_bytes(script);
+
+            if (field.kind == FieldKind::Function)
+            {
+                const FunctionData& f = field.function.value();
+                writer.write_u16(f.native_token);
+                writer.write_u8(f.oper_precedence);
+                writer.write_u32(f.flags);
+                if ((f.flags & FunctionFlag::Net) != 0) writer.write_u16(f.rep_offset.value_or(0));
+                if (!options.console_cooked) write_fname(writer, f.friendly_name.value_or(FName{}));
+            }
+            else if (field.kind == FieldKind::ScriptStruct)
+            {
+                const ScriptStructData s = field.script_struct.value_or(ScriptStructData{});
+                if (v >= vAddedStructFlagsToScriptStruct) writer.write_u32(s.flags);
+                write_properties(writer, s.defaults, options.none);
+            }
+            else if (field.kind == FieldKind::Struct)
+            {
+                write_properties(writer, field.struct_defaults, options.none);
+            }
+            else
+            {
+                const StateData& st = field.state.value();
+                if (v < vProbeMaskReducedAndIgnoreMaskRemoved)
+                {
+                    writer.write_u64(st.probe_mask);
+                    writer.write_u64(st.ignore_mask.value_or(0));
+                }
+                else
+                {
+                    writer.write_u32(static_cast<std::uint32_t>(st.probe_mask));
+                }
+                writer.write_u16(st.label_table_offset);
+                writer.write_u32(st.flags);
+                write_name_object_map(writer, st.function_map);
+                if (field.kind == FieldKind::Class)
+                {
+                    const ClassData& c = field.class_data.value();
+                    writer.write_u32(c.flags);
+                    if (v >= vClassGuidDeprecated)
+                    {
+                        if (v < vClassPlatformFlagsDeprecated) writer.write_u8(c.platform_flags.value_or(0));
+                    }
+                    else
+                    {
+                        writer.write_guid(Guid{});
+                    }
+                    writer.write_index(c.within.value);
+                    write_fname(writer, c.config_name);
+                    const bool old_order = v <= vHideCategoriesOldOrder;
+                    if (old_order && !options.console_cooked) write_name_list(writer, c.hide_categories);
+                    write_name_object_map(writer, c.component_defaults);
+                    writer.write_i32(static_cast<std::int32_t>(c.interfaces.size()));
+                    for (const auto& [cls, prop] : c.interfaces)
+                    {
+                        writer.write_i32(cls.value);
+                        writer.write_i32(prop.value);
+                    }
+                    if (!options.console_cooked)
+                    {
+                        if (v >= vAddedDontSortCategoriesToUClass) write_name_list(writer, c.dont_sort_categories);
+                        if (!old_order) write_name_list(writer, c.hide_categories);
+                        if (v >= vAddedAutoExpandCategoriesToUClass &&
+                            ((c.flags & ClassFlag::CollapseCategories) == 0 || v <= vHideCategoriesOldOrder || v >= 576))
+                            write_name_list(writer, c.auto_expand_categories);
+                        if (v >= vAddedAutoCollapseCategoriesToUClass) write_name_list(writer, c.auto_collapse_categories);
+                        if (v >= vForceScriptOrderAddedToUClass) writer.write_bool32(c.force_script_order);
+                        if (v >= vAddedClassGroupsToUClass) write_name_list(writer, c.class_groups);
+                        if (v >= vAddedNativeClassNameToUClass)
+                            throw UnsupportedError("write_field: the native class name (version >= 813) is not written", writer.position());
+                        if (v >= vAddedDLLBindFeature) write_fname(writer, c.dll_bind_name);
+                    }
+                    if (v >= vDisplacedScriptPropertiesWithClassDefaultObject) writer.write_index(c.default_object.value);
+                }
+            }
+            break;
+        }
+        case FieldKind::TextBuffer: break;
+        }
     }
 }

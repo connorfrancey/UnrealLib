@@ -22,6 +22,7 @@
 #include <UnrealLib/Decompiler/Decompiler.hpp>
 #include <UnrealLib/Decompiler/NativeTable.hpp>
 #include <UnrealLib/Linker/Linker.hpp>
+#include <UnrealLib/Reflection/Fields.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
 #include <UnrealLib/Serialization/BinaryWriter.hpp>
 
@@ -281,4 +282,73 @@ TEST(MirrorsEdgeCompilerTests, DecompileCompileRoundTrip)
     // Regression floors (measured 2026-11-12: 99.9% compile, 97.1% byte-identical)
     EXPECT_GE(compiled * 1000, total * 995);
     EXPECT_GE(identical * 1000, total * 965);
+}
+
+// write_field() is read_field()'s inverse: every reflection export of the script packages (classes, functions,
+// properties, states, structs, enums, consts) read and written again gives its own bytes back.
+TEST(MirrorsEdgeCompilerTests, FieldWriterRoundTrip)
+{
+    if (!fixtures_available())
+    {
+        GTEST_SKIP() << "UNREALLIB_MIRRORSEDGE_DIR is not set";
+    }
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    const auto scripts = load_script_packages(linker);
+    std::size_t fields = 0, identical = 0;
+    std::map<std::string, std::pair<std::size_t, std::string>> different;
+    for (const Package* package : scripts)
+    {
+        FieldWriteOptions options;
+        options.none = FName{package->names().find("None").value_or(0), 0};
+        for (std::size_t i = 0; i < package->exports().size(); ++i)
+        {
+            const ObjectRef ref{package, ObjectIndex::from_export(i)};
+            PropertyType type = PropertyType::Unknown;
+            if (!field_kind_of(package->class_name(ref.index), &type) || package->exports()[i].serial_size <= 0) continue;
+            FieldObject field;
+            try
+            {
+                field = linker.read_field(ref);
+            }
+            catch (const std::exception&)
+            {
+                continue;
+            }
+            const auto input = linker.header_input(ref);
+            if (!input) continue;
+            ++fields;
+            const auto data = package->export_data(ref.index.export_index());
+            std::span<const std::byte> script;
+            if (field.structure) script = data.subspan(field.structure->script_offset, field.structure->script_storage_size);
+            BinaryWriter writer(package->context());
+            std::string problem;
+            try
+            {
+                write_field(writer, field, script, *input, options);
+            }
+            catch (const std::exception& e)
+            {
+                problem = e.what();
+            }
+            const auto want = data.subspan(0, field.end_offset);
+            if (problem.empty())
+            {
+                if (writer.data().size() == want.size() && std::equal(writer.data().begin(), writer.data().end(), want.begin()))
+                {
+                    ++identical;
+                    continue;
+                }
+                std::size_t at = 0;
+                while (at < std::min(writer.data().size(), want.size()) && writer.data()[at] == want[at]) ++at;
+                problem = fmt::format("differs at byte {} of {} (written {})", at, want.size(), writer.data().size());
+            }
+            auto& d = different[std::string(to_string(field.kind)) + ": " + problem.substr(0, problem.find(" at byte"))];
+            if (d.first++ == 0) d.second = linker.qualified_path(ref) + ": " + problem;
+        }
+    }
+    std::cout << fmt::format("  reflection exports {}, written byte-identical {}\n", fields, identical);
+    for (const auto& [k, v] : different) std::cout << fmt::format("    {:6} {}\n           e.g. {}\n", v.first, k, v.second);
+    EXPECT_GT(fields, 50000u);
+    EXPECT_EQ(identical, fields);
 }
