@@ -412,7 +412,7 @@ TEST(MirrorsEdgeCompilerTests, BuildClassPackage)
     const auto scripts = load_script_packages(linker);
     ASSERT_FALSE(scripts.empty());
     Compiler::ScriptCompiler compiler(linker, scripts);
-    const char* source = R"(class MirageBouncePad extends Actor
+    const char* source = R"(class MirageBouncePad extends Trigger
     placeable;
 
 var() float Strength;
@@ -465,7 +465,8 @@ defaultproperties
     const FieldObject f = check.read_field(ObjectRef{&p, *cls});
     ASSERT_TRUE(f.class_data.has_value());
     EXPECT_NE(f.class_data->flags & 0x200u, 0u);    // Placeable
-    EXPECT_EQ(p.object_path(f.field.super), "Engine.Actor");
+    EXPECT_EQ(p.object_path(f.field.super), "Engine.Trigger");
+    EXPECT_EQ(f.class_data->component_defaults.size(), 2u);   // Trigger's (its collision cylinder, its sprite)
     EXPECT_EQ(f.state->function_map.size(), 2u);
 
     Decompiler::ScriptDecompiler decompiler(check, Decompiler::NativeTable::from_packages(check, check_scripts));

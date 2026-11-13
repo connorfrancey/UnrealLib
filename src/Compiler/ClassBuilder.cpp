@@ -513,9 +513,9 @@ namespace UnrealLib::Compiler
                 c.field.state = st;
                 ClassData cd;
                 const ClassData& parent = *pf->class_data;
-                // Inherited flags (Transient, Config, Localized, SafeReplace, PerObjectConfig, HasComponents, ...),
-                // then Compiled | Parsed
-                cd.flags = (parent.flags & 0x10E0646Cu) | 0x2u | 0x10u;
+                // Inherited flags (Config, Transient, Localized, SafeReplace, PerObjectConfig, EditInlineNew,
+                // CollapseCategories, HasInstancedProps, HasComponents), then Compiled | Parsed
+                cd.flags = (parent.flags & 0x00A0346Cu) | 0x2u | 0x10u;
                 if (decl.placeable) cd.flags |= 0x200u;
                 if (decl.notplaceable) cd.flags &= ~0x200u;
                 if (decl.abstract_class) cd.flags |= 0x1u;
@@ -529,6 +529,13 @@ namespace UnrealLib::Compiler
                     const auto p = M.def(pp, prop);
                     if (k && p) cd.interfaces.emplace_back(import_of(*k), import_of(*p));
                 }
+                // The parent's components (a Trigger's collision cylinder): the class's spawned actors instance them
+                // from the parent's templates, as the game's own subclasses do
+                for (const auto& [name, templ] : parent.component_defaults)
+                    if (const auto t = M.def(pp, templ))
+                        cd.component_defaults.emplace_back(m_model.make_name(pp.names().try_to_string(name).value_or("None")), import_of(*t));
+                for (const FName& h : parent.hide_categories)
+                    cd.hide_categories.push_back(m_model.make_name(pp.names().try_to_string(h).value_or("None")));
                 cd.default_object = m_defaults;
                 c.field.class_data = cd;
             }
