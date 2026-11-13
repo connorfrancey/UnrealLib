@@ -142,6 +142,7 @@ namespace UnrealLib::Compiler
             const PackageEditor* m_editor = nullptr;
             bool m_is_state = false;
             bool m_native = false;
+            int m_const_depth = 0;                      // Consts compiled inside consts
             std::vector<std::string> m_label_order;     // State labels, as they appear
 
             // Jump targets: a label is bound to the next statement emitted
@@ -636,10 +637,31 @@ namespace UnrealLib::Compiler
             }
 
             // `v` used where `want` is expected: implicit conversions only where the compiler makes them silently
+            // UE3's automatic conversions, which the compiler makes with a cast token: numbers among themselves, and
+            // numbers, bools and names to strings. Their cost ranks overloads (widening before narrowing); -1: none.
+            static int auto_cost(K from, K to)
+            {
+                if (from == to) return 0;
+                const auto numeric = [](K k) { return k == K::Byte || k == K::Int || k == K::Float; };
+                if (numeric(from) && numeric(to))
+                {
+                    if ((from == K::Byte && to == K::Int) || (from == K::Int && to == K::Float)) return 1;
+                    if (from == K::Byte && to == K::Float) return 2;
+                    return from == K::Float && to == K::Byte ? 4 : 3;    // Int -> Byte, Float -> Int
+                }
+                if (to == K::String && (numeric(from) || from == K::Bool || from == K::Name)) return 5;
+                return -1;
+            }
+
             Value convert(Value v, const Type* want, int line)
             {
                 settle_literal(v, want);
                 (void)line;
+                if (want && v.type.kind != want->kind && auto_cost(v.type.kind, want->kind) > 0)
+                {
+                    const std::uint8_t code = cast_code(v.type.kind, want->kind);
+                    if (code != kNoCast) return cast_token(code, v, make(want->kind, want->kind == K::Byte ? want->ref : ObjectRef{}));
+                }
                 return v;
             }
 
@@ -697,6 +719,26 @@ namespace UnrealLib::Compiler
                         return v;
                     }
                 return std::nullopt;
+            }
+
+            std::optional<Value> const_value(std::string_view name, int line, const Type* want)
+            {
+                const auto is_const = [&](ObjectRef r) { return M.class_of(r) == "Const"; };
+                std::optional<ObjectRef> c;
+                if (m_state.valid()) c = M.member(m_state, name, is_const);
+                if (!c && m_class.valid()) c = M.member(m_class, name, is_const);
+                if (!c) return std::nullopt;
+                const FieldObject* f = M.field(*c);
+                if (!f || !f->const_value) return std::nullopt;
+                if (m_const_depth > 8) fail(line, "const " + std::string(name) + " refers to itself");
+                Block parsed;
+                ParseError pe;
+                if (!parse_body(f->const_value->text + ";", M.operator_set, parsed, pe) || parsed.size() != 1 || !parsed[0]->expr)
+                    fail(line, "the value of const " + std::string(name) + " doesn't parse: " + f->const_value->text);
+                ++m_const_depth;
+                Value v = expression(*parsed[0]->expr, want);
+                --m_const_depth;
+                return v;
             }
 
             Function* find_function(ObjectRef scope, std::string_view name)
@@ -807,6 +849,8 @@ namespace UnrealLib::Compiler
                 case ExprKind::Identifier:
                 {
                     if (auto v = name_value(e.text)) return *v;
+                    // A const: its value, compiled in place (the UE3 compiler inlines them)
+                    if (auto v = const_value(e.text, e.line, want)) return *v;
                     // A function used as a value: a delegate assignment's right side
                     if (Function* f = scope_function(e.text))
                     {
@@ -1432,6 +1476,7 @@ namespace UnrealLib::Compiler
                     return 0;
                 }
                 if (literal && (p.kind == K::Byte || p.kind == K::Float)) return 1;
+                if (const int c = auto_cost(have.kind, p.kind); c > 0) return 1 + c;
                 if (have.kind == K::Null && (p.is_object_like() || p.kind == K::Delegate)) return 0;
                 if (have.is_object_like() && p.is_object_like()) return p.kind == K::Object && have.kind == K::Class ? 1 : (have.kind == p.kind ? 0 : -1);
                 return -1;

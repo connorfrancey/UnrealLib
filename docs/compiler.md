@@ -70,3 +70,43 @@ Found from the corpus, all reproduced:
 * **Third-party packages:** their compiler stores real context skips on `Outer` and leaves out trailing optional
   arguments in places.
 * A few single cases (a final call the source doesn't mark, literal casts, `-1.0` as a negation).
+
+## The class package builder
+
+`ScriptCompiler::build_class_package(name, source)` turns a `.uc` class (or interface) into a script package laid out
+like the game's: the reflection is written and loaded first, the bodies are compiled against it, then the package is
+written again with the bytecode and the default values.
+
+Supported: consts (inlined where used, as the UE3 compiler does), enums (`<Prefix>_MAX` added), structs (modifiers,
+`extends`, `structdefaultproperties`), variables (every modifier, static arrays sized by a number, an enum or a const,
+component, interface and delegate types), functions and events (modifiers, `native(N)` bound to native table slot N,
+optional / out / coerce / const / static-array parameters, defaults), delegates (and their hidden `__X__Delegate`
+variables), states (`auto`, `simulated`, `state()`, `extends`, `ignores`, state functions, state code with labels and
+latent calls), `defaultproperties` (dynamic arrays with `Arr(i)=`, `.Empty`, `.Add()`, `.Remove()` on the inherited
+value; `Begin Object` subobjects, nested ones too, overriding the parent's templates by name), class modifiers
+(`within`, `config`, `placeable`, `abstract`, `transient`, `perobjectconfig`, `editinlinenew`, `collapsecategories`,
+`hidecategories`, `autoexpandcategories`, `implements` of script interfaces), and `` `log`` / `` `warn``.
+
+Rules found in the game's data and reproduced:
+
+- A class lists its fields as states, functions, consts and structs newest first, then its variables in declaration
+  order, then its enums newest first. A state lists its functions newest first; a function its parameters in order.
+- Probe masks: bit `index - 300` of the engine's probe names (FName indices 300..363, read from the executable) for each
+  probe event a state or class defines, over its super state's (or parent class's) mask. `ignores` clears ignore-mask
+  bits. A state without code is `Stop, EndOfScript` with label table `0xFFFF`; state code ends with the compiler's
+  `stop`; the label table offset is the memory offset of the LabelTable token.
+- A state function's super is the super state's function, else the class-level function of its name (even
+  `Core.Object.BeginState`). An override takes only the replication flags and `exec` from what it overrides (not
+  `event`, not `simulated`); every function is `public` unless `private`/`protected`.
+- Inherited class flags: Config, Transient, Localized, SafeReplace, Placeable, PerObjectConfig, EditInlineNew,
+  CollapseCategories, HasInstancedProps, HasComponents. The parent's component map is carried; a subobject of the same
+  name replaces its entry, and inherited defaults referring to the replaced template are written again, pointing at
+  the new one.
+- Hand-written code needs UE3's automatic conversions, which the cooked code shows as explicit casts: numbers among
+  themselves (widening ranked before narrowing) and numbers, bools and names to strings. There is no byte `==`: bytes
+  and enums compare as ints (`int(M) == int(2)`).
+
+Not built (C++ only): replication blocks, native interfaces (their vtable property), `map{}` variables, native classes
+and structs (a built class is a script class). Round trip over the game's 2,338 classes (`UNREALLIB_CLASS_ROUNDTRIP=1`:
+decompile, build, decompile again, compare): 2,220 build, 2,196 identical (93.9%); the rest differ by a decompiler
+notation for some consts (`Profile.400`), a few jump layouts, and the position of hidden delegate variables.

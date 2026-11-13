@@ -10,7 +10,10 @@
 
 #include <algorithm>
 #include <functional>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <sstream>
 #include <map>
 #include <string>
 #include <vector>
@@ -22,6 +25,7 @@
 #include <UnrealLib/Decompiler/Decompiler.hpp>
 #include <UnrealLib/Decompiler/NativeTable.hpp>
 #include <UnrealLib/Linker/Linker.hpp>
+#include <UnrealLib/Linker/ReflectionSchema.hpp>
 #include <UnrealLib/Reflection/Fields.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
 #include <UnrealLib/Serialization/BinaryWriter.hpp>
@@ -376,7 +380,7 @@ TEST(MirrorsEdgeCompilerTests, DumpClass)
     {
         const ObjectIndex idx = ObjectIndex::from_export(i);
         const std::string path = p.object_path(idx);
-        if (path != wanted.substr(dot + 1) && path != "Default__" + wanted.substr(dot + 1)) continue;
+        if (path != wanted.substr(dot + 1) && path.rfind("Default__" + wanted.substr(dot + 1), 0) != 0) continue;
         std::cout << "  " << path << ": " << entry_text(p.exports()[i]) << '\n';
         const auto data = p.export_data(i);
         std::string hex;
@@ -394,6 +398,7 @@ TEST(MirrorsEdgeCompilerTests, DumpClass)
         std::cout << fmt::format("    class: flags=0x{:08X} within={} config={} hide={} components={} interfaces={} autoexpand={} cdo={}\n",
                                  c.flags, n(c.within), p.names().try_to_string(c.config_name).value_or("?"), c.hide_categories.size(),
                                  c.component_defaults.size(), c.interfaces.size(), c.auto_expand_categories.size(), n(c.default_object));
+        for (const auto& [klass, prop] : c.interfaces) std::cout << "    implements " << n(klass) << " property=" << n(prop) << std::endl;
     }
     std::cout << fmt::format("  package: flags=0x{:X} engine={} cooker={} licensee={}\n", p.summary().package_flags,
                              p.summary().engine_version, p.summary().cooker_version, p.summary().licensee_version);
@@ -475,4 +480,376 @@ defaultproperties
     EXPECT_TRUE(text.clean());
     EXPECT_NE(text.source.find("P.Velocity.Z = Strength"), std::string::npos);
     EXPECT_NE(text.source.find("Strength=1200"), std::string::npos);
+}
+
+// UNREALLIB_DUMP_FIELDS=<Package.Class>: every field under a class (states, structs, enums, consts, functions,
+// properties; recursively), with its export entry and reflection data
+TEST(MirrorsEdgeCompilerTests, DumpFields)
+{
+    const std::string wanted = env("UNREALLIB_DUMP_FIELDS");
+    if (!fixtures_available() || wanted.empty())
+    {
+        GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_DUMP_FIELDS";
+    }
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    const auto dot = wanted.find('.');
+    const Package& p = linker.load(*linker.find_package_file(wanted.substr(0, dot)));
+    const auto cls = p.find_export(wanted.substr(dot + 1));
+    ASSERT_TRUE(cls.has_value());
+    const auto n = [&](ObjectIndex x) { return x.is_null() ? std::string("-") : p.object_path(x); };
+    const std::function<void(ObjectIndex, int)> dump = [&](ObjectIndex idx, int depth) {
+        const std::string pad(static_cast<std::size_t>(depth) * 2, ' ');
+        const ExportEntry& e = p.exports()[idx.export_index()];
+        const FieldObject f = linker.read_field(ObjectRef{&p, idx});
+        std::cout << fmt::format("{}{} {}: super_index={} archetype={} flags=0x{:016X} | super={} next={}", pad,
+                                 p.class_name(idx), p.object_name(idx), n(e.super_index), n(e.archetype), e.object_flags,
+                                 n(f.field.super), n(f.field.next));
+        if (f.structure)
+            std::cout << fmt::format(" | children={} line={} pos={} script={}", n(f.structure->children), f.structure->line,
+                                     f.structure->text_pos, f.structure->script_size);
+        if (f.function) std::cout << fmt::format(" | fflags=0x{:08X} native={}", f.function->flags, f.function->native_token);
+        if (f.state)
+        {
+            std::cout << fmt::format(" | probe=0x{:X} ignore=0x{:X} label=0x{:X} sflags=0x{:X} map=", f.state->probe_mask,
+                                     f.state->ignore_mask.value_or(0), f.state->label_table_offset, f.state->flags);
+            for (const auto& [name, fn] : f.state->function_map)
+                std::cout << p.names().try_to_string(name).value_or("?") << "=" << n(fn) << ",";
+        }
+        if (f.property)
+            std::cout << fmt::format(" | type={} dim={} pflags=0x{:X} ref={} ref2={}", static_cast<int>(f.property->type),
+                                     f.property->array_dim, f.property->flags, n(f.property->reference), n(f.property->reference2));
+        if (f.kind == FieldKind::Enum) std::cout << " | names=" << f.enum_names.size();
+        if (f.const_value) std::cout << " | value=" << f.const_value->text;
+        if (f.script_struct)
+            std::cout << fmt::format(" | struct_flags=0x{:X} defaults={}", f.script_struct->flags, f.script_struct->defaults.size());
+        std::cout << " | bytes:";
+        const auto data = p.export_data(idx.export_index());
+        for (std::size_t b = 0; b < std::min<std::size_t>(data.size(), 64); ++b) std::cout << fmt::format(" {:02X}", static_cast<unsigned>(data[b]));
+        std::cout << '\n';
+        if (f.structure && depth < 3)
+        {
+            int guard = 0;
+            for (ObjectIndex c = f.structure->children; !c.is_null() && guard++ < 400;)
+            {
+                dump(c, depth + 1);
+                c = linker.read_field(ObjectRef{&p, c}).field.next;
+            }
+        }
+    };
+    dump(*cls, 0);
+}
+
+// The class package builder with everything a class can declare here: consts, enums, structs with defaults, states
+// (auto, ignores, state functions, state code with labels and latent calls, a state extending another)
+TEST(MirrorsEdgeCompilerTests, BuildClassPackageStates)
+{
+    if (!fixtures_available())
+    {
+        GTEST_SKIP() << "UNREALLIB_MIRRORSEDGE_DIR is not set";
+    }
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    const auto scripts = load_script_packages(linker);
+    ASSERT_FALSE(scripts.empty());
+    Compiler::ScriptCompiler compiler(linker, scripts);
+    const char* source = R"(class MirageSpinner extends Actor
+    placeable;
+
+const SPIN_RATE = 4096;
+
+enum ESpinMode
+{
+    SPIN_Idle,
+    SPIN_Slow,
+    SPIN_Fast
+};
+
+struct SpinStep
+{
+    var() float Duration;
+    var int Rate;
+    var ESpinMode Mode;
+
+    structdefaultproperties
+    {
+        Duration=0.5
+        Rate=1024
+    }
+};
+
+var() array<SpinStep> Steps;
+var ESpinMode Mode;
+var int Spins;
+
+function int RateFor(ESpinMode M)
+{
+    if (M == SPIN_Fast)
+    {
+        return SPIN_RATE;
+    }
+    return SPIN_RATE / 4;
+}
+
+auto state Idle
+{
+    ignores Bump;
+
+    event Touch(Actor Other, PrimitiveComponent OtherComp, Vector HitLocation, Vector HitNormal)
+    {
+        GotoState('Spinning');
+    }
+
+Begin:
+    Mode = SPIN_Idle;
+}
+
+state Spinning
+{
+    function BeginState(name PreviousStateName)
+    {
+        Mode = SPIN_Fast;
+    }
+
+Begin:
+    Spins++;
+    Sleep(0.5);
+    if (Spins < 3)
+    {
+        goto 'Begin';
+    }
+    GotoState('Idle');
+}
+
+state SpinningSlowly extends Spinning
+{
+    function BeginState(name PreviousStateName)
+    {
+        Mode = SPIN_Slow;
+    }
+}
+
+defaultproperties
+{
+    Mode=SPIN_Idle
+}
+)";
+    const Compiler::BuiltPackage built = compiler.build_class_package("MirageTestSpinner", source);
+    for (const auto& e : built.errors) std::cout << "  error: " << e << '\n';
+    ASSERT_TRUE(built.ok());
+
+    Linker check;
+    check.add_search_path(fixture_dir());
+    const auto check_scripts = load_script_packages(check);
+    Package loaded;
+    loaded.load_from_memory(built.bytes, "MirageTestSpinner");
+    const Package& p = check.add(std::move(loaded));
+    const auto cls = p.find_export("MirageSpinner");
+    ASSERT_TRUE(cls.has_value());
+
+    const auto field = [&](std::string_view path) {
+        const auto i = p.find_export(path);
+        EXPECT_TRUE(i.has_value()) << path;
+        return i ? check.read_field(ObjectRef{&p, *i}) : FieldObject{};
+    };
+    const FieldObject idle = field("MirageSpinner.Idle");
+    ASSERT_TRUE(idle.state.has_value());
+    EXPECT_NE(idle.state->flags & StateFlag::Auto, 0u);
+    EXPECT_NE(idle.state->probe_mask & (1ull << 13), 0u);                     // Touch
+    EXPECT_EQ(idle.state->ignore_mask.value_or(0) & (1ull << 15), 0u);       // ignores Bump
+    const FieldObject spinning = field("MirageSpinner.Spinning");
+    ASSERT_TRUE(spinning.state.has_value());
+    EXPECT_NE(spinning.state->probe_mask & (1ull << 16), 0u);                // BeginState
+    EXPECT_NE(spinning.state->label_table_offset, 0xFFFF);
+    const FieldObject slowly = field("MirageSpinner.SpinningSlowly");
+    EXPECT_EQ(p.object_path(slowly.field.super), "MirageSpinner.Spinning");
+    const FieldObject mode = field("MirageSpinner.ESpinMode");
+    EXPECT_EQ(mode.enum_names.size(), 4u);                                   // SPIN_MAX added
+    const FieldObject step = field("MirageSpinner.SpinStep");
+    ASSERT_TRUE(step.script_struct.has_value());
+    EXPECT_EQ(step.script_struct->defaults.size(), 2u);
+    const FieldObject k = field("MirageSpinner.SPIN_RATE");
+    ASSERT_TRUE(k.const_value.has_value());
+    EXPECT_EQ(k.const_value->text, "4096");
+
+    Decompiler::ScriptDecompiler decompiler(check, Decompiler::NativeTable::from_packages(check, check_scripts));
+    const auto text = decompiler.decompile_class(ObjectRef{&p, *cls});
+    std::cout << text.source;
+    EXPECT_TRUE(text.clean());
+    EXPECT_NE(text.source.find("Sleep(0.5)"), std::string::npos);
+    EXPECT_NE(text.source.find("goto 'Begin'"), std::string::npos);
+    EXPECT_NE(text.source.find("return 4096"), std::string::npos);            // The const, inlined
+}
+
+// UNREALLIB_BUILD_CLASS=<file.uc>: builds the class and prints the errors, or the class decompiled back
+TEST(MirrorsEdgeCompilerTests, BuildClassFile)
+{
+    const std::string file = env("UNREALLIB_BUILD_CLASS");
+    if (!fixtures_available() || file.empty())
+    {
+        GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_BUILD_CLASS";
+    }
+    std::ifstream in(file, std::ios::binary);
+    const std::string source((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    const auto scripts = load_script_packages(linker);
+    Compiler::ScriptCompiler compiler(linker, scripts);
+    const Compiler::BuiltPackage built = compiler.build_class_package("MirageTestFile", source);
+    for (const auto& e : built.errors) std::cout << "  error: " << e << '\n';
+    ASSERT_TRUE(built.ok());
+    Linker check;
+    check.add_search_path(fixture_dir());
+    const auto check_scripts = load_script_packages(check);
+    Package loaded;
+    loaded.load_from_memory(built.bytes, "MirageTestFile");
+    const Package& p = check.add(std::move(loaded));
+    Decompiler::ScriptDecompiler decompiler(check, Decompiler::NativeTable::from_packages(check, check_scripts));
+    ReflectionSchema schema(check);
+    schema.add_package(p);
+    for (const Package* sp : check_scripts) schema.add_package(*sp);
+    decompiler.set_schema(&schema);
+    if (const std::string probe = env("UNREALLIB_SCHEMA_PROBE"); !probe.empty())
+    {
+        const auto dot = probe.find('.');
+        const auto t = schema.find_property(probe.substr(0, dot), probe.substr(dot + 1));
+        std::cout << "  schema " << probe << ": " << (t ? static_cast<int>(t->type) : -1) << " inner "
+                  << (t && t->inner ? static_cast<int>(t->inner->type) : -1) << std::endl;
+    }
+    for (std::size_t i = 0; i < p.exports().size(); ++i)
+        if (p.class_name(ObjectIndex::from_export(i)) == "Class")
+            std::cout << decompiler.decompile_class(ObjectRef{&p, ObjectIndex::from_export(i)}).source;
+}
+
+// UNREALLIB_CLASS_ROUNDTRIP=1 (slow; =<Package> for one package): every class of the script packages decompiled,
+// built again with the class package builder, decompiled again, and the two sources compared. Reported: how many
+// build, how many come back identical, the build errors and the first differing line (grouped, an example each).
+TEST(MirrorsEdgeCompilerTests, ClassRoundTrip)
+{
+    const std::string wanted = env("UNREALLIB_CLASS_ROUNDTRIP");
+    if (!fixtures_available() || wanted.empty())
+    {
+        GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_CLASS_ROUNDTRIP";
+    }
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    const auto scripts = load_script_packages(linker);
+    const Decompiler::NativeTable natives = Decompiler::NativeTable::from_packages(linker, scripts);
+    Decompiler::ScriptDecompiler decompiler(linker, natives);
+    ReflectionSchema schema(linker);
+    for (const Package* p : scripts) schema.add_package(*p);
+    decompiler.set_schema(&schema);
+    Compiler::ScriptCompiler compiler(linker, scripts);
+
+    std::size_t total = 0, built = 0, identical = 0, n = 0;
+    std::map<std::string, std::pair<std::size_t, std::string>> errors, differences;
+    const auto tally = [](auto& m, const std::string& k, const std::string& example) {
+        auto& e = m[k];
+        if (e.first++ == 0) e.second = example;
+    };
+    // The class header's modifiers as a set, without the ones a built class can't have (native C++ classes)
+    const auto normalized = [](const std::string& source) {
+        const auto end = source.find(";\n");
+        if (end == std::string::npos) return source;
+        std::istringstream header(source.substr(0, end));
+        std::vector<std::string> words;
+        for (std::string w; header >> w;)
+            if (w != "native" && w.rfind("native(", 0) != 0 && w != "nativereplication" && w != "noexport") words.push_back(w);
+        std::sort(words.begin() + std::min<std::size_t>(words.size(), 4), words.end());
+        std::string out;
+        for (const std::string& w : words) out += w + " ";
+        std::string rest = source.substr(end);
+        // Native structs: C++ ones (a built struct is a script struct)
+        for (std::size_t at = rest.find("struct native "); at != std::string::npos; at = rest.find("struct native ", at))
+            rest.erase(at + 6, 7);
+        return out + rest;
+    };
+    const auto lines = [](const std::string& s) {
+        std::vector<std::string> out;
+        std::size_t at = 0;
+        while (at <= s.size())
+        {
+            const auto end = s.find('\n', at);
+            out.push_back(s.substr(at, end == std::string::npos ? std::string::npos : end - at));
+            if (end == std::string::npos) break;
+            at = end + 1;
+        }
+        return out;
+    };
+    for (const Package* package : scripts)
+    {
+        if (wanted != "1" && package->name() != wanted) continue;
+        for (std::size_t i = 0; i < package->exports().size(); ++i)
+        {
+            const ObjectIndex idx = ObjectIndex::from_export(i);
+            if (package->class_name(idx) != "Class") continue;
+            const std::string path = package->name() + "." + package->object_name(idx);
+            ++total;
+            std::string original;
+            try
+            {
+                original = decompiler.decompile_class(ObjectRef{package, idx}).source;
+            }
+            catch (const std::exception& e)
+            {
+                tally(errors, "decompile: " + std::string(e.what()).substr(0, 60), path);
+                continue;
+            }
+            const auto result = compiler.build_class_package(fmt::format("MirageRT{}", n++), original);
+            if (!result.ok())
+            {
+                std::string k = result.errors.empty() ? "?" : result.errors.front();
+                // Group by the message without its line number and names in quotes
+                if (const auto c = k.find(": "); k.rfind("line ", 0) == 0 && c != std::string::npos) k = k.substr(c + 2);
+                if (const auto q = k.find('\''); q != std::string::npos) k = k.substr(0, q);
+                tally(errors, k.substr(0, 90), path + ": " + (result.errors.empty() ? "" : result.errors.front()));
+                continue;
+            }
+            ++built;
+            std::string again;
+            try
+            {
+                // The rebuilt package, read through the first linker (it knows every script package); its own schema
+                // entries first, so its classes' defaults decode against them
+                Package copy;
+                copy.load_from_memory(result.bytes, fmt::format("MirageRTCopy{}", n));
+                const Package& cp = linker.add(std::move(copy));
+                ReflectionSchema schema2(linker);
+                schema2.add_package(cp);
+                for (const Package* sp : scripts) schema2.add_package(*sp);
+                Decompiler::ScriptDecompiler d2(linker, natives);
+                d2.set_schema(&schema2);
+                again = d2.decompile_class(ObjectRef{&cp, *cp.find_export(package->object_name(idx))}).source;
+            }
+            catch (const std::exception& e)
+            {
+                tally(errors, "decompile again: " + std::string(e.what()).substr(0, 60), path);
+                continue;
+            }
+            if (normalized(again) == normalized(original))
+            {
+                ++identical;
+                continue;
+            }
+            const auto a = lines(normalized(original)), b = lines(normalized(again));
+            std::size_t l = 0;
+            while (l < a.size() && l < b.size() && a[l] == b[l]) ++l;
+            const std::string was = l < a.size() ? a[l] : "<end>", now = l < b.size() ? b[l] : "<end>";
+            std::string key = was;
+            key.erase(0, key.find_first_not_of(' '));
+            tally(differences, key.substr(0, key.find_first_of("(=;") == std::string::npos ? 40 : std::min<std::size_t>(40, key.find_first_of("(=;"))),
+                  path + ": [" + was + "] -> [" + now + "]");
+        }
+    }
+    std::cout << fmt::format("  classes {}, built {}, identical {} ({:.1f}%)\n", total, built, identical,
+                             total ? 100.0 * static_cast<double>(identical) / static_cast<double>(total) : 0.0);
+    const auto print = [](const char* title, const auto& m) {
+        std::vector<std::pair<std::size_t, std::string>> sorted;
+        for (const auto& [k, v] : m) sorted.emplace_back(v.first, k + "\n        e.g. " + v.second);
+        std::sort(sorted.rbegin(), sorted.rend());
+        std::cout << "  " << title << ":\n";
+        for (std::size_t i = 0; i < sorted.size() && i < 25; ++i) std::cout << fmt::format("    {:5} {}\n", sorted[i].first, sorted[i].second);
+    };
+    print("build errors", errors);
+    print("differences", differences);
 }

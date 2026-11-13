@@ -523,7 +523,7 @@ namespace UnrealLib::Decompiler
 
     void ScriptDecompiler::format_properties(const Package& package, const std::vector<Property>& properties,
                                              const std::set<std::int32_t>& subobjects, int depth, std::string& out,
-                                             DecompiledScript& totals)
+                                             DecompiledScript& totals, ObjectRef owner)
     {
         PropertyFormatOptions format;
         format.names = &package.names();
@@ -555,7 +555,9 @@ namespace UnrealLib::Decompiler
             }
             if (const auto* array = std::get_if<ArrayValue>(&p.value.value))
             {
-                if (array->elements.empty())
+                // Empty, or shorter than the inherited array: defaultproperties start from the inherited one
+                if (array->elements.empty() ||
+                    (owner.package != nullptr && inherited_array_count(owner, p.name) > array->elements.size()))
                 {
                     out += pad + name + ".Empty\n";
                 }
@@ -568,6 +570,35 @@ namespace UnrealLib::Decompiler
             }
             out += pad + name + "=" + format_property_value(p.value, format) + "\n";
         }
+    }
+
+    std::size_t ScriptDecompiler::inherited_array_count(ObjectRef object, std::string_view name)
+    {
+        ObjectRef current = object;
+        for (int guard = 0; guard < 64; ++guard)
+        {
+            if (!current.index.is_export()) return 0;
+            const ObjectIndex archetype = current.package->exports()[current.index.export_index()].archetype;
+            if (archetype.is_null()) return 0;
+            const Resolution& r = m_linker.resolve(ObjectRef{current.package, archetype});
+            if (r.status != ResolveStatus::Export) return 0;
+            current = r.target;
+            try
+            {
+                const ObjectProperties props = m_linker.read_properties(current, m_schema);
+                for (const Property& p : props.properties)
+                    if (Text::iequals(p.name, name))
+                    {
+                        const auto* array = std::get_if<ArrayValue>(&p.value.value);
+                        return array ? static_cast<std::size_t>(std::max(array->count, 0)) : 0;
+                    }
+            }
+            catch (const Error&)
+            {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     void ScriptDecompiler::property_lines(ObjectRef object, int depth, std::string& out, DecompiledScript& totals,
@@ -598,7 +629,7 @@ namespace UnrealLib::Decompiler
         try
         {
             const ObjectProperties props = m_linker.read_properties(object, m_schema);
-            format_properties(package, props.properties, subobject_set, depth, out, totals);
+            format_properties(package, props.properties, subobject_set, depth, out, totals, object);
         }
         catch (const Error& error)
         {

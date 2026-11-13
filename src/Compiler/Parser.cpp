@@ -237,6 +237,15 @@ namespace UnrealLib::Compiler
                 return out;
             }
 
+            // A braced block, or a single statement (`if (x) return;`)
+            Block body_or_statement()
+            {
+                if (is("{")) return braced();
+                Block out;
+                out.push_back(statement());
+                return out;
+            }
+
             ExprPtr paren_expr()
             {
                 expect("(");
@@ -271,12 +280,12 @@ namespace UnrealLib::Compiler
                         s->body.push_back(std::move(g));
                         return s;
                     }
-                    s->body = braced();
+                    s->body = body_or_statement();
                     if (accept_word("else"))
                     {
                         s->has_else = true;
                         if (is_word("if")) s->else_body.push_back(statement());
-                        else s->else_body = braced();
+                        else s->else_body = body_or_statement();
                     }
                     return s;
                 }
@@ -287,13 +296,13 @@ namespace UnrealLib::Compiler
                     if (!(is_word("true") && is(")", 1))) s->expr = expression();
                     else next();
                     expect(")");
-                    s->body = braced();
+                    s->body = body_or_statement();
                     return s;
                 }
                 if (accept_word("do"))
                 {
                     s->kind = StmtKind::DoUntil;
-                    s->body = braced();
+                    s->body = body_or_statement();
                     if (!accept_word("until")) fail("expected 'until'");
                     s->expr = paren_expr();
                     expect(";");
@@ -309,14 +318,14 @@ namespace UnrealLib::Compiler
                     expect(";");
                     if (!is(")")) s->increment = expression();
                     expect(")");
-                    s->body = braced();
+                    s->body = body_or_statement();
                     return s;
                 }
                 if (accept_word("foreach"))
                 {
                     s->kind = StmtKind::ForEach;
                     s->expr = postfix_expr();     // F(args), or Array(item[, index]) parsed as a call on the array
-                    s->body = braced();
+                    s->body = body_or_statement();
                     return s;
                 }
                 if (accept_word("switch"))

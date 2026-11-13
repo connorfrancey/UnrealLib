@@ -123,7 +123,9 @@ namespace UnrealLib::Decompiler
         void property_lines(ObjectRef object, int depth, std::string& out, DecompiledScript& totals, int nesting = 0);
         void format_properties(const Package& package, const std::vector<Property>& properties,
                                const std::set<std::int32_t>& subobjects, int depth, std::string& out,
-                               DecompiledScript& totals);
+                               DecompiledScript& totals, ObjectRef owner = {});
+        /// Elements of the dynamic array @p name that @p object inherits through its archetypes (0: none).
+        [[nodiscard]] std::size_t inherited_array_count(ObjectRef object, std::string_view name);
         [[nodiscard]] std::string indentation(int depth) const;
         static void accumulate(DecompiledScript& totals, const DecompiledScript& part);
 
