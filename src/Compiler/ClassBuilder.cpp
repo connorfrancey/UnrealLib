@@ -12,6 +12,7 @@
 #include <array>
 #include <cctype>
 #include <functional>
+#include <list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -758,10 +759,10 @@ namespace UnrealLib::Compiler
                 {
                     std::size_t end = block.find('\n', at);
                     if (end == std::string::npos) end = block.size();
-                    std::string l = trim(block.substr(at, end - at));
+                    std::string l = trim(without_comment(block.substr(at, end - at)));
                     at = end + 1;
                     ++line;
-                    if (l.empty() || l.rfind("//", 0) == 0) continue;
+                    if (l.empty()) continue;
                     const std::string ll = lower(l);
                     if (ll.rfind("begin object", 0) == 0)
                     {
@@ -791,6 +792,23 @@ namespace UnrealLib::Compiler
                     (open.empty() ? out : open.back()->lines).push_back(default_line(l, line));
                 }
                 if (!open.empty()) throw DeclError{open.back()->line, "Begin Object without End Object"};
+            }
+            // A line without its `// comment` (outside quotes: "http://..." stays)
+            static std::string without_comment(const std::string& l)
+            {
+                char quote = 0;
+                for (std::size_t i = 0; i + 1 < l.size(); ++i)
+                {
+                    const char c = l[i];
+                    if (quote)
+                    {
+                        if (c == '\\') ++i;
+                        else if (c == quote) quote = 0;
+                    }
+                    else if (c == '"' || c == '\'') quote = c;
+                    else if (c == '/' && l[i + 1] == '/') return l.substr(0, i);
+                }
+                return l;
             }
             static std::vector<std::string> split_spaces(const std::string& text)
             {
@@ -1004,6 +1022,18 @@ namespace UnrealLib::Compiler
 
                 m_defaults = add(kDefaultsFlags, m_class, {}, "Default__" + decl.name, {}, parent_defaults(*pf));
                 for (const SubobjectDecl& sub : decl.subobjects) subobject(sub, m_defaults, {}, "");
+                // Every inherited component gets the class's own template too (archetype: the parent's), as the game's
+                // subclasses have: the engine instances a spawned actor's components from its class's templates; one
+                // left pointing at the parent's template is attached itself, shared by every actor of the class
+                for (const auto& [name, templ] : pf->class_data->component_defaults)
+                {
+                    const std::string n = pp.names().try_to_string(name).value_or("");
+                    if (n.empty() || m_templates.count(lower(n))) continue;
+                    SubobjectDecl& d = m_inherited_subobjects.emplace_back();
+                    d.name = n;
+                    d.line = 1;
+                    subobject(d, m_defaults, {}, "");
+                }
                 std::vector<ObjectIndex> children;
                 for (auto* list : {&states, &funcs, &consts, &structs})
                     children.insert(children.end(), list->rbegin(), list->rend());
@@ -1726,6 +1756,7 @@ namespace UnrealLib::Compiler
                 const SubobjectDecl* decl = nullptr;
             };
             std::map<std::string, Template> m_templates;   // Our subobjects, by lowered path ("Outer.Name" when nested)
+            std::list<SubobjectDecl> m_inherited_subobjects; // Copies of the parent's components (stable addresses)
             const Template* template_at(ObjectIndex i) const
             {
                 for (const auto& [k, x] : m_templates)

@@ -475,11 +475,19 @@ defaultproperties
     EXPECT_EQ(f.state->function_map.size(), 2u);
 
     Decompiler::ScriptDecompiler decompiler(check, Decompiler::NativeTable::from_packages(check, check_scripts));
+    ReflectionSchema schema(check);
+    schema.add_package(p);
+    for (const Package* sp : check_scripts) schema.add_package(*sp);
+    decompiler.set_schema(&schema);
     const auto text = decompiler.decompile_class(ObjectRef{&p, *cls});
     std::cout << text.source;
     EXPECT_TRUE(text.clean());
     EXPECT_NE(text.source.find("P.Velocity.Z = Strength"), std::string::npos);
     EXPECT_NE(text.source.find("Strength=1200"), std::string::npos);
+    // Its own copies of Trigger's components, the inherited references pointing at them
+    EXPECT_NE(text.source.find("Begin Object Class=CylinderComponent Name=CollisionCylinder"), std::string::npos);
+    EXPECT_NE(text.source.find("Components(1)=CollisionCylinder"), std::string::npos);
+    EXPECT_NE(text.source.find("CollisionComponent=CollisionCylinder"), std::string::npos);
 }
 
 // UNREALLIB_DUMP_FIELDS=<Package.Class>: every field under a class (states, structs, enums, consts, functions,

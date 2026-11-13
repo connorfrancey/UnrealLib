@@ -99,9 +99,13 @@ Rules found in the game's data and reproduced:
   `Core.Object.BeginState`). An override takes only the replication flags and `exec` from what it overrides (not
   `event`, not `simulated`); every function is `public` unless `private`/`protected`.
 - Inherited class flags: Config, Transient, Localized, SafeReplace, Placeable, PerObjectConfig, EditInlineNew,
-  CollapseCategories, HasInstancedProps, HasComponents. The parent's component map is carried; a subobject of the same
-  name replaces its entry, and inherited defaults referring to the replaced template are written again, pointing at
-  the new one.
+  CollapseCategories, HasInstancedProps, HasComponents.
+- Every component the parent class has (its component map) gets the class's own template under its default object,
+  archetype the parent's template, as the game's subclasses have; a `Begin Object` of the same name is that template.
+  Inherited defaults referring to the parent's templates (`Components`, `CollisionComponent`) are written again,
+  pointing at the class's own. Without its own templates, the engine attaches the parent's template itself to the first
+  actor spawned (shared, and unusable for the next ones). The cooker leaves some editor-only components (Sprite,
+  Arrow) out of a few subclasses; the builder copies them all (9 classes of the round trip differ by that).
 - Hand-written code needs UE3's automatic conversions, which the cooked code shows as explicit casts: numbers among
   themselves (widening ranked before narrowing) and numbers, bools and names to strings. There is no byte `==`: bytes
   and enums compare as ints (`int(M) == int(2)`).
@@ -109,4 +113,4 @@ Rules found in the game's data and reproduced:
 Not built (C++ only): replication blocks, native interfaces (their vtable property), `map{}` variables, native classes
 and structs (a built class is a script class). Round trip over the game's 2,338 classes (`UNREALLIB_CLASS_ROUNDTRIP=1`:
 decompile, build, decompile again, compare): 2,220 build, 2,196 identical (93.9%); the rest differ by a decompiler
-notation for some consts (`Profile.400`), a few jump layouts, and the position of hidden delegate variables.
+notation for some consts (`Profile.400`), a few jump layouts, and the position of hidden delegate variables. (2,187 identical, 93.5%, since every inherited component is copied.)
