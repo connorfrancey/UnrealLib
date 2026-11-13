@@ -15,402 +15,12 @@
 #include <UnrealLib/Reflection/Fields.hpp>
 #include <UnrealLib/Serialization/BinaryWriter.hpp>
 
+#include "Model.hpp"
 #include "Parser.hpp"
 
 namespace UnrealLib::Compiler
 {
-    namespace
-    {
-        std::string lower(std::string_view s)
-        {
-            std::string out(s);
-            for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return out;
-        }
-        bool iequal(std::string_view a, std::string_view b)
-        {
-            if (a.size() != b.size()) return false;
-            for (std::size_t i = 0; i < a.size(); ++i)
-                if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
-            return true;
-        }
-
-        struct RefKey
-        {
-            const Package* package;
-            std::int32_t index;
-            friend bool operator<(const RefKey& a, const RefKey& b)
-            {
-                return a.package != b.package ? std::less<const Package*>()(a.package, b.package) : a.index < b.index;
-            }
-        };
-        RefKey key(ObjectRef r) { return {r.package, r.index.value}; }
-
-        /// A compile error: the line and what went wrong
-        struct Error
-        {
-            int line;
-            std::string message;
-        };
-
-        // ---- Types ------------------------------------------------------------------------------------------------
-        enum class K : std::uint8_t { Void, Byte, Int, Bool, Float, Name, String, Object, Class, Struct, Array, Delegate,
-                                      Interface, Map, Pointer, Null, Unknown };
-
-        struct Type
-        {
-            K kind = K::Void;
-            ObjectRef ref;                       ///< Byte: enum; Object/Interface: class; Class: meta class; Struct: struct
-            std::shared_ptr<const Type> inner;   ///< Array
-            ObjectRef property;                  ///< The property the value came from (when it did)
-
-            bool is_object_like() const { return kind == K::Object || kind == K::Class || kind == K::Interface || kind == K::Null; }
-        };
-        Type make(K k, ObjectRef ref = {}) { Type t; t.kind = k; t.ref = ref; return t; }
-
-        // ---- Operators and functions --------------------------------------------------------------------------------
-        struct Param
-        {
-            ObjectRef property;
-            Type type;
-            std::uint64_t flags = 0;
-            std::string name;
-            bool out() const { return (flags & PropertyFlag::OutParm) != 0; }
-            bool optional() const { return (flags & PropertyFlag::OptionalParm) != 0; }
-            bool skip() const { return (flags & PropertyFlag::SkipParm) != 0; }
-            bool coerce() const { return (flags & PropertyFlag::CoerceParm) != 0; }
-        };
-        struct Function
-        {
-            ObjectRef def;
-            std::string name;                    ///< Object name ("Add_IntInt")
-            std::string text;                    ///< Friendly name for operators ("+"), else the name
-            std::uint32_t flags = 0;
-            std::uint16_t native = 0;
-            std::uint8_t precedence = 0;
-            std::vector<Param> params;
-            std::optional<Param> ret;
-            bool is_final() const { return (flags & FunctionFlag::Final) != 0; }
-            bool is_static() const { return (flags & FunctionFlag::Static) != 0; }
-            bool is_delegate() const { return (flags & FunctionFlag::Delegate) != 0; }
-            bool is_iterator() const { return (flags & FunctionFlag::Iterator) != 0; }
-        };
-
-        constexpr std::uint8_t kNoCast = 0xFF;
-        // Primitive cast opcodes (UE3 ECastToken): from -> to
-        std::uint8_t cast_code(K from, K to)
-        {
-            using P = std::pair<K, K>;
-            static const std::map<P, std::uint8_t> codes = {
-                {{K::Interface, K::String}, 0x37}, {{K::Interface, K::Bool}, 0x38}, {{K::Struct, K::Struct}, 0x39},
-                {{K::Byte, K::Int}, 0x3A}, {{K::Byte, K::Bool}, 0x3B}, {{K::Byte, K::Float}, 0x3C}, {{K::Int, K::Byte}, 0x3D},
-                {{K::Int, K::Bool}, 0x3E}, {{K::Int, K::Float}, 0x3F}, {{K::Bool, K::Byte}, 0x40}, {{K::Bool, K::Int}, 0x41},
-                {{K::Bool, K::Float}, 0x42}, {{K::Float, K::Byte}, 0x43}, {{K::Float, K::Int}, 0x44}, {{K::Float, K::Bool}, 0x45},
-                {{K::Object, K::Bool}, 0x47}, {{K::Name, K::Bool}, 0x48}, {{K::String, K::Byte}, 0x49},
-                {{K::String, K::Int}, 0x4A}, {{K::String, K::Bool}, 0x4B}, {{K::String, K::Float}, 0x4C},
-                {{K::Byte, K::String}, 0x52}, {{K::Int, K::String}, 0x53}, {{K::Bool, K::String}, 0x54},
-                {{K::Float, K::String}, 0x55}, {{K::Object, K::String}, 0x56}, {{K::Name, K::String}, 0x57},
-                {{K::Delegate, K::String}, 0x5A}, {{K::String, K::Name}, 0x60},
-            };
-            const auto it = codes.find({from, to});
-            return it == codes.end() ? kNoCast : it->second;
-        }
-        bool primitive_cast_name(std::string_view n, K& to, std::string& struct_name)
-        {
-            const std::string l = lower(n);
-            if (l == "int") to = K::Int;
-            else if (l == "float") to = K::Float;
-            else if (l == "byte") to = K::Byte;
-            else if (l == "bool") to = K::Bool;
-            else if (l == "string") to = K::String;
-            else if (l == "name") to = K::Name;
-            else if (l == "vector" || l == "rotator") { to = K::Struct; struct_name = l; }
-            else return false;
-            return true;
-        }
-    }
-
-    // ==== The model: what the compiler reads about the game's classes ====================================================
-    struct ScriptCompiler::Impl
-    {
-        Linker& linker;
-        std::vector<const Package*> scripts;
-        OperatorSet operator_set;
-        std::multimap<std::string, Function*> operators;         // lowered text -> operator functions
-        std::map<RefKey, std::unique_ptr<FieldObject>> fields;
-        std::map<RefKey, std::unique_ptr<Function>> functions;
-        std::map<const Package*, std::map<RefKey, ObjectIndex>> imports;   // per package: definition -> its import
-        std::map<RefKey, std::uint32_t> struct_sizes;
-        std::map<std::string, ObjectRef> by_path;                 // lowered "Package.Path" -> definition
-
-        Impl(Linker& l, std::span<const Package* const> s) : linker(l), scripts(s.begin(), s.end()) { load_operators(); }
-
-        // ---- Fields -----------------------------------------------------------------------------------------------
-        const FieldObject* field(ObjectRef def)
-        {
-            if (!def.is_export()) return nullptr;
-            const auto k = key(def);
-            if (auto it = fields.find(k); it != fields.end()) return it->second.get();
-            std::unique_ptr<FieldObject> f;
-            try
-            {
-                f = std::make_unique<FieldObject>(linker.read_field(def));
-            }
-            catch (const std::exception&)
-            {
-                f = nullptr;
-            }
-            return fields.emplace(k, std::move(f)).first->second.get();
-        }
-        std::optional<ObjectRef> def(const Package& p, ObjectIndex index)
-        {
-            if (index.is_null()) return std::nullopt;
-            if (index.is_export()) return ObjectRef{&p, index};
-            const Resolution& r = linker.resolve(p, index);
-            if (r.status == ResolveStatus::Export) return r.target;
-            return std::nullopt;
-        }
-        std::string name_of(ObjectRef r) const { return r.package->object_name(r.index); }
-        std::string class_of(ObjectRef r) const { return r.package->class_name(r.index); }
-        ObjectRef outer_of(ObjectRef r) const
-        {
-            const ObjectIndex o = r.package->outer(r.index);
-            return o.is_null() ? ObjectRef{} : ObjectRef{r.package, o};
-        }
-        std::optional<ObjectRef> super_of(ObjectRef r)
-        {
-            const FieldObject* f = field(r);
-            if (!f) return std::nullopt;
-            return def(*r.package, f->field.super);
-        }
-        std::vector<ObjectRef> children(ObjectRef r)
-        {
-            std::vector<ObjectRef> out;
-            const FieldObject* f = field(r);
-            if (!f || !f->structure) return out;
-            ObjectIndex c = f->structure->children;
-            for (int guard = 0; !c.is_null() && guard < 100000; ++guard)
-            {
-                const ObjectRef child{r.package, c};
-                out.push_back(child);
-                const FieldObject* cf = field(child);
-                if (!cf) break;
-                c = cf->field.next;
-            }
-            return out;
-        }
-        // The index of `d` in package `p`: its export, or the import that resolves to it
-        ObjectIndex index_in(const Package& p, ObjectRef d)
-        {
-            if (d.package == &p) return d.index;
-            auto [it, first] = imports.try_emplace(&p);
-            if (first)
-                for (std::size_t i = 0; i < p.imports().size(); ++i)
-                {
-                    const ObjectIndex idx = ObjectIndex::from_import(i);
-                    const Resolution& r = linker.resolve(p, idx);
-                    if (r.status == ResolveStatus::Export) it->second.emplace(key(r.target), idx);
-                }
-            const auto f = it->second.find(key(d));
-            return f == it->second.end() ? ObjectIndex{} : f->second;
-        }
-        // An object by "Package.Outer.Name" path (object literals)
-        std::optional<ObjectRef> find_path(std::string_view path)
-        {
-            if (by_path.empty())
-                for (const Package* p : scripts)
-                    for (std::size_t i = 0; i < p->exports().size(); ++i)
-                    {
-                        const ObjectIndex idx = ObjectIndex::from_export(i);
-                        by_path.emplace(lower(p->name() + "." + p->object_path(idx)), ObjectRef{p, idx});
-                    }
-            const auto it = by_path.find(lower(path));
-            if (it != by_path.end()) return it->second;
-            // Objects of other packages (a map's): load the package and look
-            const auto dot = path.find('.');
-            if (dot == std::string_view::npos) return std::nullopt;
-            const Package* p = linker.find_package(path.substr(0, dot));
-            if (!p) return std::nullopt;
-            for (std::size_t i = 0; i < p->exports().size(); ++i)
-            {
-                const ObjectIndex idx = ObjectIndex::from_export(i);
-                if (iequal(p->name() + "." + p->object_path(idx), path)) return ObjectRef{p, idx};
-            }
-            return std::nullopt;
-        }
-
-        // ---- Types ------------------------------------------------------------------------------------------------
-        Type property_type(ObjectRef prop)
-        {
-            const FieldObject* f = field(prop);
-            Type t;
-            t.property = prop;
-            if (!f || !f->property) { t.kind = K::Unknown; return t; }
-            const PropertyData& d = *f->property;
-            const auto ref = [&](ObjectIndex i) { return def(*prop.package, i).value_or(ObjectRef{}); };
-            switch (d.type)
-            {
-            case PropertyType::Byte: t.kind = K::Byte; t.ref = ref(d.reference); break;
-            case PropertyType::Int: t.kind = K::Int; break;
-            case PropertyType::Bool: t.kind = K::Bool; break;
-            case PropertyType::Float: t.kind = K::Float; break;
-            case PropertyType::Name: t.kind = K::Name; break;
-            case PropertyType::Str: case PropertyType::String: t.kind = K::String; break;
-            case PropertyType::Object: case PropertyType::Component: t.kind = K::Object; t.ref = ref(d.reference); break;
-            case PropertyType::Class: t.kind = K::Class; t.ref = ref(d.reference2); break;
-            case PropertyType::Interface: t.kind = K::Interface; t.ref = ref(d.reference); break;
-            case PropertyType::Struct: t.kind = K::Struct; t.ref = ref(d.reference); break;
-            case PropertyType::Delegate: t.kind = K::Delegate; t.ref = ref(d.reference); break;
-            case PropertyType::Map: t.kind = K::Map; break;
-            case PropertyType::Pointer: t.kind = K::Pointer; break;
-            case PropertyType::Array:
-            {
-                t.kind = K::Array;
-                if (const auto inner = def(*prop.package, d.reference))
-                {
-                    Type in = property_type(*inner);
-                    in.property = {};
-                    t.inner = std::make_shared<Type>(in);
-                }
-                break;
-            }
-            default: t.kind = K::Unknown; break;
-            }
-            return t;
-        }
-        std::uint64_t property_flags(ObjectRef prop)
-        {
-            const FieldObject* f = field(prop);
-            return f && f->property ? f->property->flags : 0;
-        }
-        std::int32_t array_dim(ObjectRef prop)
-        {
-            const FieldObject* f = field(prop);
-            return f && f->property ? f->property->dimension() : 1;
-        }
-
-        // Value sizes (Context and Switch store the size of the value): the engine's layout rules
-        std::uint32_t size_of(const Type& t)
-        {
-            switch (t.kind)
-            {
-            case K::Byte: return 1;
-            case K::Int: case K::Bool: case K::Float: case K::Object: case K::Class: case K::Pointer: case K::Null: return 4;
-            case K::Name: case K::Interface: return 8;
-            case K::String: case K::Array: case K::Delegate: return 12;
-            case K::Map: return 60;
-            case K::Struct: return t.ref.valid() ? struct_size(t.ref) : 0;
-            default: return 0;
-            }
-        }
-        std::uint32_t align_of(const Type& t)
-        {
-            if (t.kind == K::Byte) return 1;
-            if (t.kind == K::Struct && t.ref.valid() && iequal(name_of(t.ref), "Matrix")) return 16;
-            return 4;
-        }
-        std::uint32_t struct_size(ObjectRef s)
-        {
-            const auto k = key(s);
-            if (auto it = struct_sizes.find(k); it != struct_sizes.end()) return it->second;
-            struct_sizes[k] = 0;    // Guard
-            std::uint32_t offset = 0;
-            if (const auto super = super_of(s)) offset = struct_size(*super);
-            bool bools = false;
-            for (const ObjectRef c : children(s))
-            {
-                const FieldObject* f = field(c);
-                if (!f || !f->property) continue;
-                const Type t = property_type(c);
-                if (t.kind == K::Bool)
-                {
-                    if (bools) continue;    // Packed into the previous one's dword
-                    bools = true;
-                }
-                else
-                {
-                    bools = false;
-                }
-                const std::uint32_t a = align_of(t);
-                offset = (offset + a - 1) / a * a + size_of(t) * static_cast<std::uint32_t>(std::max(1, array_dim(c)));
-            }
-            struct_sizes[k] = offset;
-            return offset;
-        }
-
-        // ---- Functions --------------------------------------------------------------------------------------------
-        Function* function(ObjectRef d)
-        {
-            const auto k = key(d);
-            if (auto it = functions.find(k); it != functions.end()) return it->second.get();
-            auto fn = std::make_unique<Function>();
-            fn->def = d;
-            fn->name = name_of(d);
-            fn->text = fn->name;
-            if (const FieldObject* f = field(d); f && f->function)
-            {
-                fn->flags = f->function->flags;
-                fn->native = f->function->native_token;
-                fn->precedence = f->function->oper_precedence;
-                if (f->function->friendly_name)
-                    fn->text = d.package->names().try_to_string(*f->function->friendly_name).value_or(fn->name);
-            }
-            for (const ObjectRef c : children(d))
-            {
-                const FieldObject* cf = field(c);
-                if (!cf || !cf->property) continue;
-                const std::uint64_t flags = cf->property->flags;
-                Param p{c, property_type(c), flags, name_of(c)};
-                if (flags & PropertyFlag::ReturnParm) fn->ret = p;
-                else if (flags & PropertyFlag::Parm) fn->params.push_back(p);
-            }
-            return functions.emplace(k, std::move(fn)).first->second.get();
-        }
-
-        void load_operators()
-        {
-            std::map<std::string, std::map<std::uint8_t, int>> precedences;
-            for (const Package* p : scripts)
-                for (std::size_t i = 0; i < p->exports().size(); ++i)
-                {
-                    const ObjectRef r{p, ObjectIndex::from_export(i)};
-                    if (p->class_name(r.index) != "Function") continue;
-                    Function* fn = function(r);
-                    if (!(fn->flags & FunctionFlag::Operator)) continue;
-                    operators.emplace(lower(fn->text), fn);
-                    if (fn->flags & FunctionFlag::PreOperator) operator_set.prefix.insert(fn->text);
-                    else if (fn->precedence == 0) operator_set.postfix.insert(fn->text);
-                    else ++precedences[fn->text][fn->precedence];
-                }
-            // An operator's precedence for parsing: the one most of its overloads declare
-            for (const auto& [text, counts] : precedences)
-            {
-                const auto best = std::max_element(counts.begin(), counts.end(),
-                                                   [](const auto& a, const auto& b) { return a.second < b.second; });
-                operator_set.binary[text] = best->first;
-            }
-        }
-
-        // ---- Lookup -----------------------------------------------------------------------------------------------
-        // The first child named `n` of struct `s` or its supers (properties, functions, states, consts)
-        std::optional<ObjectRef> member(ObjectRef s, std::string_view n, const std::function<bool(ObjectRef)>& accept)
-        {
-            std::optional<ObjectRef> cur = s;
-            for (int guard = 0; cur && guard < 64; ++guard)
-            {
-                for (const ObjectRef c : children(*cur))
-                    if (iequal(name_of(c), n) && accept(c)) return c;
-                cur = super_of(*cur);
-            }
-            return std::nullopt;
-        }
-        bool is_property(ObjectRef r)
-        {
-            const FieldObject* f = field(r);
-            return f && f->kind == FieldKind::Property;
-        }
-        bool is_function(ObjectRef r) { return class_of(r) == "Function"; }
-    };
+    using namespace detail;
 
     // ==== Code generation =================================================================================================
     namespace
@@ -429,7 +39,8 @@ namespace UnrealLib::Compiler
         class Generator
         {
         public:
-            Generator(ScriptCompiler::Impl& m, ObjectRef owner, Script& out) : M(m), m_owner(owner), m_pkg(*owner.package), S(out)
+            Generator(ScriptCompiler::Impl& m, ObjectRef owner, Script& out, const PackageEditor* editor = nullptr)
+                : M(m), m_owner(owner), m_pkg(*owner.package), S(out), m_editor(editor)
             {
                 const std::string k = M.class_of(owner);
                 m_is_state = k == "State";
@@ -456,7 +67,7 @@ namespace UnrealLib::Compiler
                     {
                         Token t;
                         t.kind = TokenKind::NativeParameter;
-                        t.object = M.index_in(m_pkg, p.property);
+                        t.object = reference(p.property);
                         emit_statement(add(t));
                     }
                     emit_statement(nothing());
@@ -507,7 +118,7 @@ namespace UnrealLib::Compiler
                     if (m_function && m_function->ret)
                     {
                         n.kind = TokenKind::ReturnNothing;
-                        n.object = M.index_in(m_pkg, m_function->ret->property);
+                        n.object = reference(m_function->ret->property);
                     }
                     else
                     {
@@ -528,6 +139,7 @@ namespace UnrealLib::Compiler
             const Package& m_pkg;
             Script& S;
             Function* m_function = nullptr;
+            const PackageEditor* m_editor = nullptr;
             bool m_is_state = false;
             bool m_native = false;
             std::vector<std::string> m_label_order;     // State labels, as they appear
@@ -562,6 +174,14 @@ namespace UnrealLib::Compiler
                 S.tokens.push_back(std::move(t));
                 return static_cast<std::uint32_t>(S.tokens.size() - 1);
             }
+            // The package's index for `d`: its export or import, or one the editor adds (a package being built)
+            ObjectIndex reference(ObjectRef d)
+            {
+                ObjectIndex i = M.index_in(m_pkg, d);
+                if (i.is_null() && m_editor && m_editor->reference) i = m_editor->reference(d);
+                return i;
+            }
+
             const TokenMap& scripts_map() const
             {
                 static const TokenMap map = TokenMap::ue3(m_pkg.summary().file_version, &m_pkg.profile());
@@ -663,7 +283,7 @@ namespace UnrealLib::Compiler
                     {
                         Token eat;
                         eat.kind = TokenKind::EatReturnValue;
-                        eat.object = M.index_in(m_pkg, v.returns);
+                        eat.object = reference(v.returns);
                         emit_statement(add(eat));
                     }
                     emit_statement(v.token);
@@ -685,7 +305,7 @@ namespace UnrealLib::Compiler
                     {
                         Token n;
                         n.kind = TokenKind::ReturnNothing;
-                        n.object = M.index_in(m_pkg, m_function->ret->property);
+                        n.object = reference(m_function->ret->property);
                         r.children = {add(n)};
                     }
                     else if (s.expr)
@@ -1027,7 +647,7 @@ namespace UnrealLib::Compiler
             {
                 Token t;
                 t.kind = kind;
-                t.object = M.index_in(m_pkg, prop);
+                t.object = reference(prop);
                 if (t.object.is_null()) fail(0, "no reference to " + M.name_of(prop) + " in " + m_pkg.name());
                 Value v;
                 v.type = M.property_type(prop);
@@ -1140,7 +760,7 @@ namespace UnrealLib::Compiler
                         if (t.object.is_null()) fail(e.line, "no object " + e.text);
                         return {add(t), iequal(e.type_name, "Class") ? make(K::Class) : make(K::Object)};
                     }
-                    t.object = M.index_in(m_pkg, *d);
+                    t.object = reference(*d);
                     if (t.object.is_null()) fail(e.line, "no reference to " + e.text + " in " + m_pkg.name());
                     const bool is_class = iequal(e.type_name, "Class");
                     return {add(t), is_class ? make(K::Class, *d) : make(K::Object)};
@@ -1194,6 +814,14 @@ namespace UnrealLib::Compiler
                         t.kind = TokenKind::DelegateProperty;
                         t.name = name_of_text(f->name, e.line);
                         return {add(t), make(K::Delegate, f->def)};
+                    }
+                    // An enumerator (cooked bytecode keeps only its value)
+                    if (const auto en = M.enumerator(e.text))
+                    {
+                        Token t;
+                        t.kind = TokenKind::ByteConst;
+                        t.byte_value = en->second;
+                        return {add(t), make(K::Byte, en->first)};
                     }
                     fail(e.line, "unknown identifier '" + e.text + "'");
                 }
@@ -1264,7 +892,7 @@ namespace UnrealLib::Compiler
                     if (!c) fail(e.line, "unknown class " + e.type_name);
                     Token t;
                     t.kind = TokenKind::MetaClassCast;
-                    t.object = M.index_in(m_pkg, *c);
+                    t.object = reference(*c);
                     t.children = {expression(*e.left, nullptr).token};
                     return {add(t), make(K::Class, *c)};
                 }
@@ -1299,6 +927,7 @@ namespace UnrealLib::Compiler
                         if (const auto base = m_pkg.names().find(text.substr(0, us))) return FName{*base, n + 1};
                     }
                 }
+                if (m_editor && m_editor->name) return m_editor->name(text);
                 fail(line, "the name '" + std::string(text) + "' isn't in " + m_pkg.name() + "'s name table");
             }
 
@@ -1369,8 +998,8 @@ namespace UnrealLib::Compiler
                     if (!p) fail(e.line, "no member '" + e.text + "' in the struct");
                     Token t;
                     t.kind = TokenKind::StructMember;
-                    t.object = M.index_in(m_pkg, *p);
-                    t.object2 = M.index_in(m_pkg, obj.type.ref);
+                    t.object = reference(*p);
+                    t.object2 = reference(obj.type.ref);
                     t.children = {obj.token};
                     Value v;
                     v.type = M.property_type(*p);
@@ -1519,7 +1148,7 @@ namespace UnrealLib::Compiler
                 else if (f.is_final() || force_final)
                 {
                     t.kind = TokenKind::FinalFunction;
-                    t.object = M.index_in(m_pkg, f.def);
+                    t.object = reference(f.def);
                     if (t.object.is_null()) fail(line, "no reference to " + f.name + " in " + m_pkg.name());
                 }
                 else
@@ -1649,7 +1278,7 @@ namespace UnrealLib::Compiler
                 // The delegate's property: __Name__Delegate
                 const std::string prop = "__" + std::string(name) + "__Delegate";
                 const auto p = M.member(in ? *in : m_class, prop, [&](ObjectRef r) { return M.is_property(r); });
-                if (p) t.object = M.index_in(m_pkg, *p);
+                if (p) t.object = reference(*p);
                 t.name = name_of_text(f.name, e.line);
                 t.children = arguments(f, e.args, e.line);
                 Value v;
@@ -1721,7 +1350,7 @@ namespace UnrealLib::Compiler
                 const bool interface = M.field(cls) && M.field(cls)->class_data && (M.field(cls)->class_data->flags & 0x4000u);
                 const bool from_object = v.type.kind == K::Object && (!v.type.ref.valid() || iequal(M.name_of(v.type.ref), "Object"));
                 t.kind = interface && !from_object ? TokenKind::InterfaceCast : TokenKind::DynamicCast;
-                t.object = M.index_in(m_pkg, cls);
+                t.object = reference(cls);
                 if (t.object.is_null()) fail(line, "no reference to " + M.name_of(cls) + " in " + m_pkg.name());
                 t.children = {v.token};
                 return {add(t), make(interface ? K::Interface : K::Object, cls)};
@@ -1843,7 +1472,7 @@ namespace UnrealLib::Compiler
                     if (a.type.kind == K::Struct)
                     {
                         t.kind = eq ? TokenKind::StructCmpEq : TokenKind::StructCmpNe;
-                        t.object = M.index_in(m_pkg, a.type.ref);
+                        t.object = reference(a.type.ref);
                     }
                     else if (a.type.kind == K::Delegate || values[1].type.kind == K::Delegate)
                     {
@@ -1868,7 +1497,7 @@ namespace UnrealLib::Compiler
                 else
                 {
                     t.kind = TokenKind::FinalFunction;
-                    t.object = M.index_in(m_pkg, best->def);
+                    t.object = reference(best->def);
                     if (t.object.is_null()) fail(line, "no reference to operator " + best->name + " in " + m_pkg.name());
                 }
                 for (std::size_t i = 0; i < values.size(); ++i)
@@ -1900,7 +1529,8 @@ namespace UnrealLib::Compiler
     }
     ScriptCompiler::~ScriptCompiler() = default;
 
-    CompiledScript ScriptCompiler::compile_body(std::string_view source, ObjectRef owner, std::span<const std::string> default_values)
+    CompiledScript ScriptCompiler::compile_body(std::string_view source, ObjectRef owner, std::span<const std::string> default_values,
+                                                const PackageEditor* editor)
     {
         CompiledScript out;
         Block body;
@@ -1912,7 +1542,7 @@ namespace UnrealLib::Compiler
         }
         try
         {
-            Generator g(*m_impl, owner, out.script);
+            Generator g(*m_impl, owner, out.script, editor);
             g.prologue(default_values);
             g.body(body);
         }

@@ -352,3 +352,126 @@ TEST(MirrorsEdgeCompilerTests, FieldWriterRoundTrip)
     EXPECT_GT(fields, 50000u);
     EXPECT_EQ(identical, fields);
 }
+
+// UNREALLIB_DUMP_CLASS=<Package.Class>: a class's export entry, reflection fields and default object, for building
+// class packages like the ones the game loads
+TEST(MirrorsEdgeCompilerTests, DumpClass)
+{
+    const std::string wanted = env("UNREALLIB_DUMP_CLASS");
+    if (!fixtures_available() || wanted.empty())
+    {
+        GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_DUMP_CLASS";
+    }
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    const auto dot = wanted.find('.');
+    const Package& p = linker.load(*linker.find_package_file(wanted.substr(0, dot)));
+    const auto entry_text = [&](const ExportEntry& e) {
+        const auto name = [&](ObjectIndex i) { return i.is_null() ? std::string("-") : p.object_path(i); };
+        return fmt::format("class={} super={} outer={} archetype={} object_flags=0x{:016X} export_flags=0x{:X} package_flags=0x{:X} size={}",
+                           name(e.class_index), name(e.super_index), name(e.outer), name(e.archetype), e.object_flags,
+                           e.export_flags, e.package_flags, e.serial_size);
+    };
+    for (std::size_t i = 0; i < p.exports().size(); ++i)
+    {
+        const ObjectIndex idx = ObjectIndex::from_export(i);
+        const std::string path = p.object_path(idx);
+        if (path != wanted.substr(dot + 1) && path != "Default__" + wanted.substr(dot + 1)) continue;
+        std::cout << "  " << path << ": " << entry_text(p.exports()[i]) << '\n';
+        const auto data = p.export_data(i);
+        std::string hex;
+        for (std::size_t b = 0; b < std::min<std::size_t>(data.size(), 160); ++b) hex += fmt::format("{:02X} ", static_cast<unsigned>(data[b]));
+        std::cout << "    bytes: " << hex << '\n';
+        if (p.class_name(idx) != "Class") continue;
+        const FieldObject f = linker.read_field(ObjectRef{&p, idx});
+        const auto n = [&](ObjectIndex x) { return x.is_null() ? std::string("-") : p.object_path(x); };
+        std::cout << fmt::format("    super={} next={} children={} script_text={} cpp_text={} line={} pos={} script_size={}\n",
+                                 n(f.field.super), n(f.field.next), n(f.structure->children), n(f.structure->script_text),
+                                 n(f.structure->cpp_text), f.structure->line, f.structure->text_pos, f.structure->script_size);
+        std::cout << fmt::format("    state: probe=0x{:X} label_table=0x{:X} flags=0x{:X} funcs={}\n", f.state->probe_mask,
+                                 f.state->label_table_offset, f.state->flags, f.state->function_map.size());
+        const ClassData& c = *f.class_data;
+        std::cout << fmt::format("    class: flags=0x{:08X} within={} config={} hide={} components={} interfaces={} autoexpand={} cdo={}\n",
+                                 c.flags, n(c.within), p.names().try_to_string(c.config_name).value_or("?"), c.hide_categories.size(),
+                                 c.component_defaults.size(), c.interfaces.size(), c.auto_expand_categories.size(), n(c.default_object));
+    }
+    std::cout << fmt::format("  package: flags=0x{:X} engine={} cooker={} licensee={}\n", p.summary().package_flags,
+                             p.summary().engine_version, p.summary().cooker_version, p.summary().licensee_version);
+}
+
+// The class package builder: a placeable actor with a property, an event and a function, built against the game's
+// script packages, then loaded by another linker and decompiled back to source
+TEST(MirrorsEdgeCompilerTests, BuildClassPackage)
+{
+    if (!fixtures_available())
+    {
+        GTEST_SKIP() << "UNREALLIB_MIRRORSEDGE_DIR is not set";
+    }
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    const auto scripts = load_script_packages(linker);
+    ASSERT_FALSE(scripts.empty());
+    Compiler::ScriptCompiler compiler(linker, scripts);
+    const char* source = R"(class MirageBouncePad extends Actor
+    placeable;
+
+var() float Strength;
+var int Bounces;
+
+event Touch(Actor Other, PrimitiveComponent OtherComp, Vector HitLocation, Vector HitNormal)
+{
+    local Pawn P;
+
+    P = Pawn(Other);
+    if (P == None)
+    {
+        return;
+    }
+    Bounces++;
+    P.Velocity.Z = Strength;
+    P.SetPhysics(PHYS_Falling);
+}
+
+function int TimesBounced(optional bool bReset)
+{
+    local int N;
+
+    N = Bounces;
+    if (bReset)
+    {
+        Bounces = 0;
+    }
+    return N;
+}
+
+defaultproperties
+{
+    Strength=1200.0
+    bCollideActors=true
+}
+)";
+    const Compiler::BuiltPackage built = compiler.build_class_package("MirageTestPad", source);
+    for (const auto& e : built.errors) std::cout << "  error: " << e << '\n';
+    ASSERT_TRUE(built.ok());
+
+    Linker check;
+    check.add_search_path(fixture_dir());
+    const auto check_scripts = load_script_packages(check);
+    Package loaded;
+    loaded.load_from_memory(built.bytes, "MirageTestPad");
+    const Package& p = check.add(std::move(loaded));
+    const auto cls = p.find_export("MirageBouncePad");
+    ASSERT_TRUE(cls.has_value());
+    const FieldObject f = check.read_field(ObjectRef{&p, *cls});
+    ASSERT_TRUE(f.class_data.has_value());
+    EXPECT_NE(f.class_data->flags & 0x200u, 0u);    // Placeable
+    EXPECT_EQ(p.object_path(f.field.super), "Engine.Actor");
+    EXPECT_EQ(f.state->function_map.size(), 2u);
+
+    Decompiler::ScriptDecompiler decompiler(check, Decompiler::NativeTable::from_packages(check, check_scripts));
+    const auto text = decompiler.decompile_class(ObjectRef{&p, *cls});
+    std::cout << text.source;
+    EXPECT_TRUE(text.clean());
+    EXPECT_NE(text.source.find("P.Velocity.Z = Strength"), std::string::npos);
+    EXPECT_NE(text.source.find("Strength=1200"), std::string::npos);
+}

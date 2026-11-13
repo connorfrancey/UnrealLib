@@ -110,7 +110,9 @@ unreallib_add_module(Decompiler
 unreallib_add_module(Compiler
         SOURCES
             Compiler/Ast.hpp
+            Compiler/ClassBuilder.cpp
             Compiler/Compiler.cpp
+            Compiler/Model.hpp
             Compiler/Parser.cpp
             Compiler/Parser.hpp
         PUBLIC_DEPS

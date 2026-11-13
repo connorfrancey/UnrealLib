@@ -11,6 +11,7 @@
 ///
 /// Scope: the statements and expressions the decompiler prints, which is the language of function and state bodies.
 /// Declarations (class, variables, function signatures) are read from the package, not compiled.
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -28,6 +29,22 @@ namespace UnrealLib::Compiler
         Script script;                     ///< Token tree (jumps by Token::target), for assemble_script()
         std::vector<std::string> errors;   ///< "line 12: unknown identifier 'Foo'"; empty when it compiled
         [[nodiscard]] bool ok() const noexcept { return errors.empty(); }
+    };
+
+    /// @brief What a body needs that its package doesn't have yet, for a package being built: imports and names.
+    struct PackageEditor
+    {
+        std::function<ObjectIndex(ObjectRef)> reference;   ///< The package's index for an object (adds an import)
+        std::function<FName(std::string_view)> name;        ///< The FName for a text (adds it to the name table)
+    };
+
+    /// @brief A script package built from UnrealScript source (ScriptCompiler::build_class_package()).
+    struct BuiltPackage
+    {
+        std::vector<std::byte> bytes;      ///< The package file
+        std::vector<std::string> errors;   ///< "line 12: ..."; empty when it built
+        std::vector<std::string> warnings;
+        [[nodiscard]] bool ok() const noexcept { return errors.empty() && !bytes.empty(); }
     };
 
     /// @brief Compiles function and state bodies against linked packages.
@@ -49,7 +66,14 @@ namespace UnrealLib::Compiler
         /// @param default_values The default value of each optional parameter of @p owner, in order, as source ("" for
         ///        none): DecompiledScript::default_values.
         [[nodiscard]] CompiledScript compile_body(std::string_view source, ObjectRef owner,
-                                                  std::span<const std::string> default_values = {});
+                                                  std::span<const std::string> default_values = {},
+                                                  const PackageEditor* editor = nullptr);
+
+        /// @brief Builds a script package named @p package_name holding the class @p source declares (a `.uc` file:
+        ///        `class X extends Y ...;`, variables, functions and events, `defaultproperties`), laid out like the
+        ///        packages the game loads: the class, its properties and functions (bodies compiled), its default
+        ///        object. The parent and every type it uses must be in the linked packages.
+        [[nodiscard]] BuiltPackage build_class_package(std::string_view package_name, std::string_view source);
 
         struct Impl;    ///< The model of the game's classes (opaque)
 
