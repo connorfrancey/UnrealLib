@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -39,6 +41,58 @@ namespace fs = std::filesystem;
 
 namespace
 {
+    // The kDOP tree of a static mesh read with decode_kdop_nodes(): every node reached once from node 0, children after
+    // their parent, leaves covering every triangle exactly once, a leaf's box holding its triangles' vertices (LOD 0)
+    // and a node's box holding its children's. "" if it holds.
+    std::string kdop_problem(const StaticMesh& mesh)
+    {
+        const std::vector<KDopNode> nodes = decode_kdop_nodes(mesh);
+        if (nodes.empty()) return mesh.kdop_triangles.empty() ? "" : "triangles but no nodes";
+        if (mesh.lods.empty()) return "no LOD";
+        const auto& positions = mesh.lods.front().positions;
+        const auto inside = [](const Vec3& p, const KDopNode& n) {
+            const float e = 0.01f + 1e-4f * std::max({std::abs(n.max.x - n.min.x), std::abs(n.max.y - n.min.y), std::abs(n.max.z - n.min.z)});
+            return p.x >= n.min.x - e && p.y >= n.min.y - e && p.z >= n.min.z - e && p.x <= n.max.x + e &&
+                   p.y <= n.max.y + e && p.z <= n.max.z + e;
+        };
+        std::vector<int> covered(mesh.kdop_triangles.size(), 0);
+        std::vector<int> visited(nodes.size(), 0);
+        std::vector<std::size_t> stack{0};
+        while (!stack.empty())
+        {
+            const std::size_t i = stack.back();
+            stack.pop_back();
+            if (visited[i]++) return fmt::format("node {} reached twice", i);
+            const KDopNode& n = nodes[i];
+            if (n.leaf)
+            {
+                if (static_cast<std::size_t>(n.second) + n.first > covered.size())
+                    return fmt::format("leaf {} triangles {}+{} of {}", i, n.second, n.first, covered.size());
+                for (std::size_t t = n.second; t < static_cast<std::size_t>(n.second) + n.first; ++t)
+                {
+                    ++covered[t];
+                    for (const std::uint16_t v : mesh.kdop_triangles[t].vertices)
+                    {
+                        if (v >= positions.size()) return fmt::format("triangle {} vertex {} of {}", t, v, positions.size());
+                        if (!inside(positions[v], n)) return fmt::format("leaf {} box doesn't hold triangle {}", i, t);
+                    }
+                }
+                continue;
+            }
+            for (const std::uint16_t c : {n.first, n.second})
+            {
+                if (c <= i || c >= nodes.size()) return fmt::format("node {} child {} of {}", i, c, nodes.size());
+                if (!inside(nodes[c].min, n) || !inside(nodes[c].max, n)) return fmt::format("node {} box doesn't hold child {}", i, c);
+                stack.push_back(c);
+            }
+        }
+        for (std::size_t i = 0; i < visited.size(); ++i)
+            if (!visited[i]) return fmt::format("node {} of {} unreachable", i, nodes.size());
+        for (std::size_t t = 0; t < covered.size(); ++t)
+            if (covered[t] != 1) return fmt::format("triangle {} in {} leaves", t, covered[t]);
+        return "";
+    }
+
     struct AssetTally
     {
         std::map<std::string, std::size_t> read;      // class -> exports read
@@ -57,6 +111,7 @@ namespace
         std::size_t offset_mismatches = 0;
         std::size_t separate_mips_decoded = 0;
         std::size_t mesh_vertices = 0;
+        std::size_t kdop_checked = 0, kdop_built = 0, kdop_built_identical = 0;
         std::size_t mesh_triangles = 0;
         std::size_t meshes_dumped = 0;
         std::size_t skeletal_bones = 0;
@@ -74,7 +129,7 @@ namespace
         void fail(const std::string& cls, const std::string& path, const std::string& message)
         {
             ++total_failures;
-            const std::string key = cls + ": " + message.substr(0, 90);
+            const std::string key = cls + ": " + message.substr(0, 160);
             if (failures[key]++ == 0)
             {
                 std::cout << "    first failure [" << key << "] at " << path << '\n';
@@ -143,6 +198,47 @@ namespace
                 {
                     const StaticMesh mesh = read_static_mesh(linker, ref);
                     ++tally.read[cls];
+                    // write_static_mesh() must reproduce the native bytes exactly (cooked meshes: uncooked ones keep
+                    // source triangles, which it refuses; one third-party mod package in the corpus has such a mesh).
+                    if (std::ranges::none_of(mesh.lods, [](const StaticMeshLod& l) { return l.raw_triangles.has_payload(); }))
+                    {
+                        const std::size_t native = open_asset(linker, ref).native_offset;
+                        const auto data = package.export_data(i);
+                        const std::vector<std::byte> written = write_static_mesh(
+                            mesh, package.context(), static_cast<std::uint64_t>(package.exports()[i].serial_offset) + native);
+                        if (native > data.size() || !std::ranges::equal(written, data.subspan(native)))
+                        {
+                            std::size_t at = 0;
+                            const auto rest = data.subspan(std::min(native, data.size()));
+                            while (at < written.size() && at < rest.size() && written[at] == rest[at]) ++at;
+                            std::string bytes;
+                            for (std::size_t k = at & ~std::size_t{3}; k < std::min(at + 12, rest.size()); ++k)
+                                bytes += fmt::format(" {:02x}/{:02x}", static_cast<unsigned>(written[k]), static_cast<unsigned>(rest[k]));
+                            tally.fail(cls, linker.qualified_path(ref),
+                                       fmt::format("write_static_mesh at {}:{} (nodes {}, triangles {}; {} bytes written, {} stored)", at, bytes,
+                                                   mesh.kdop_node_count, mesh.kdop_triangle_count, written.size(), rest.size()));
+                        }
+                    }
+                    // The game's collision tree decodes to a consistent tree, and one built again is consistent too
+                    ++tally.kdop_checked;
+                    if (const std::string why = kdop_problem(mesh); !why.empty())
+                    {
+                        tally.fail(cls, linker.qualified_path(ref), "kDOP: " + why);
+                    }
+                    else if (!mesh.kdop_triangles.empty())
+                    {
+                        StaticMesh built = mesh;
+                        build_kdop(built);
+                        ++tally.kdop_built;
+                        if (const std::string why = kdop_problem(built); !why.empty())
+                        {
+                            tally.fail(cls, linker.qualified_path(ref), "build_kdop: " + why);
+                        }
+                        tally.kdop_built_identical += built.kdop_nodes == mesh.kdop_nodes &&
+                                                      std::ranges::equal(built.kdop_triangles, mesh.kdop_triangles, [](const KDopTriangle& a, const KDopTriangle& b) {
+                                                          return a.vertices == b.vertices && a.material_index == b.material_index;
+                                                      });
+                    }
                     for (const auto& lod : mesh.lods)
                     {
                         tally.mesh_vertices += lod.positions.size();
@@ -397,6 +493,8 @@ namespace
         print_map("static mesh UV sets", tally.uv_sets);
         print_map("anim sets", tally.anim_set_bones);
         print_map("anim formats", tally.anim_formats);
+        std::cout << "  kDOP trees checked: " << tally.kdop_checked << ", built again: " << tally.kdop_built
+                  << ", identical to the game's: " << tally.kdop_built_identical << '\n';
         std::cout << "  static mesh vertices: " << tally.mesh_vertices << ", triangles: " << tally.mesh_triangles << '\n'
                   << "  brush polygons: " << tally.polygons << ", BSP surfaces: " << tally.model_surfaces
                   << ", models with Polys: " << tally.models_with_polys << '\n'
