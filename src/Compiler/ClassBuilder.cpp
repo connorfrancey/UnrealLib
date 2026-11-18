@@ -1054,6 +1054,10 @@ namespace UnrealLib::Compiler
                 st.function_map = class_map;
                 st.probe_mask = class_probe;
                 st.label_table_offset = 0xFFFF;
+                // The class's own Auto flag means "no auto state: the class itself" (the engine's GotoState('Auto')
+                // looks at it before the states): an auto state of its own clears it
+                for (const StateDecl& sd : decl.states)
+                    if (sd.flags & StateFlag::Auto) st.flags &= ~StateFlag::Auto;
                 c.field.state = st;
                 ClassData cd;
                 const ClassData& parent = *pf->class_data;
@@ -1708,7 +1712,8 @@ namespace UnrealLib::Compiler
                 m_units.push_back(Unit{i, nullptr, &st});
             }
 
-            // The memory offset of a state's LabelTable (0xFFFF: no labels): the size of what comes before it
+            // The memory offset of a state's label entries (0xFFFF: no labels): the size of what comes before the
+            // LabelTable token, plus the token's byte (the engine reads the entries there, as the game's states have it)
             static std::uint16_t label_table_offset(const Script& script, const TokenMap& map, const Package& p)
             {
                 for (std::size_t s = 0; s < script.statements.size(); ++s)
@@ -1717,7 +1722,7 @@ namespace UnrealLib::Compiler
                         Script head = script;
                         head.statements.resize(s);
                         BinaryWriter w(p.context());
-                        return static_cast<std::uint16_t>(assemble_script(w, head, map));
+                        return static_cast<std::uint16_t>(assemble_script(w, head, map) + 1);
                     }
                 return 0xFFFF;
             }
