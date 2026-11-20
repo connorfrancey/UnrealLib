@@ -41,6 +41,21 @@ namespace fs = std::filesystem;
 
 namespace
 {
+    // The package's FName for @p text ("Name_3" is Name with number 4), as the writers take it.
+    FName package_name(const Package& package, std::string_view text)
+    {
+        const std::size_t u = text.rfind('_');
+        if (u != std::string_view::npos && u + 1 < text.size() && text[u + 1] != '0' &&
+            text.find_first_not_of("0123456789", u + 1) == std::string_view::npos)
+        {
+            if (const auto base = package.names().find(text.substr(0, u)))
+            {
+                return FName{*base, std::stoi(std::string(text.substr(u + 1))) + 1};
+            }
+        }
+        return FName{package.names().find(text).value_or(-1), 0};
+    }
+
     // The kDOP tree of a static mesh read with decode_kdop_nodes(): every node reached once from node 0, children after
     // their parent, leaves covering every triangle exactly once, a leaf's box holding its triangles' vertices (LOD 0)
     // and a node's box holding its children's. "" if it holds.
@@ -115,6 +130,7 @@ namespace
         std::size_t mesh_triangles = 0;
         std::size_t meshes_dumped = 0;
         std::size_t skeletal_bones = 0;
+        std::size_t skeletal_written = 0;
         std::size_t skeletal_vertices = 0;
         std::size_t skeletal_dumped = 0;
         std::size_t anim_keys = 0;
@@ -272,6 +288,28 @@ namespace
                 {
                     const SkeletalMesh mesh = read_skeletal_mesh(linker, ref);
                     ++tally.read[cls];
+                    // write_skeletal_mesh() must reproduce the native bytes exactly.
+                    {
+                        const std::size_t native = open_asset(linker, ref).native_offset;
+                        const auto data = package.export_data(i);
+                        const std::vector<std::byte> written = write_skeletal_mesh(
+                            mesh, package.context(), package.profile().assets,
+                            [&](std::string_view text) { return package_name(package, text); },
+                            static_cast<std::uint64_t>(package.exports()[i].serial_offset) + native);
+                        ++tally.skeletal_written;
+                        if (native > data.size() || !std::ranges::equal(written, data.subspan(native)))
+                        {
+                            std::size_t at = 0;
+                            const auto rest = data.subspan(std::min(native, data.size()));
+                            while (at < written.size() && at < rest.size() && written[at] == rest[at]) ++at;
+                            std::string bytes;
+                            for (std::size_t k = at & ~std::size_t{3}; k < std::min(at + 12, rest.size()); ++k)
+                                bytes += fmt::format(" {:02x}/{:02x}", static_cast<unsigned>(written[k]), static_cast<unsigned>(rest[k]));
+                            tally.fail(cls, linker.qualified_path(ref),
+                                       fmt::format("write_skeletal_mesh differs at {}:{} ({} bytes written, {} stored)", at,
+                                                   bytes, written.size(), rest.size()));
+                        }
+                    }
                     tally.skeletal_bones += mesh.skeleton.size();
                     for (const auto& lod : mesh.lods)
                     {
@@ -378,18 +416,7 @@ namespace
                         tally.fail(cls, linker.qualified_path(ref), "ElementOwner is not the outer Model");
                     }
                     // write_polys() must reproduce the native bytes exactly.
-                    const auto make_name = [&](std::string_view text) {
-                        const std::size_t u = text.rfind('_');
-                        if (u != std::string_view::npos && u + 1 < text.size() && text[u + 1] != '0' &&
-                            text.find_first_not_of("0123456789", u + 1) == std::string_view::npos)
-                        {
-                            if (const auto base = package.names().find(text.substr(0, u)))
-                            {
-                                return FName{*base, std::stoi(std::string(text.substr(u + 1))) + 1};
-                            }
-                        }
-                        return FName{package.names().find(text).value_or(-1), 0};
-                    };
+                    const auto make_name = [&](std::string_view text) { return package_name(package, text); };
                     const std::vector<std::byte> written =
                         write_polys(polys, package.context(), make_name);
                     const auto data = package.export_data(i);
@@ -499,7 +526,8 @@ namespace
                   << "  brush polygons: " << tally.polygons << ", BSP surfaces: " << tally.model_surfaces
                   << ", models with Polys: " << tally.models_with_polys << '\n'
                   << "  anim tracks checked against RawAnimData: " << tally.anim_raw_tracks_compared << '\n'
-                  << "  skeletal mesh bones: " << tally.skeletal_bones << ", vertices: " << tally.skeletal_vertices
+                  << "  skeletal meshes written back: " << tally.skeletal_written << ", bones: " << tally.skeletal_bones
+                  << ", vertices: " << tally.skeletal_vertices
                   << '\n';
         std::cout << "  textures decoded: " << tally.textures_decoded
                   << ", without stored mips: " << tally.textures_without_payload

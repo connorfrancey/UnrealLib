@@ -93,10 +93,14 @@ namespace UnrealLib::Assets
             const std::size_t color_bytes = rules.late ? 4 : 0;
             const std::size_t rigid_size = 12 + 12 + uv_bytes + color_bytes + 1;
             const std::size_t soft_size = 12 + 12 + uv_bytes + color_bytes + 8;
+            const auto bytes = [&](std::size_t n) {
+                const auto view = r.read_view(n);
+                return std::vector<std::byte>(view.begin(), view.end());
+            };
             c.stored_rigid_vertices = r.read_array_count(rigid_size);
-            (void)r.read_view(c.stored_rigid_vertices * rigid_size);
+            c.stored_rigid_bytes = bytes(c.stored_rigid_vertices * rigid_size);
             c.stored_soft_vertices = r.read_array_count(soft_size);
-            (void)r.read_view(c.stored_soft_vertices * soft_size);
+            c.stored_soft_bytes = bytes(c.stored_soft_vertices * soft_size);
             c.bone_map = read_i16_array(r);
             c.rigid_vertices = r.read_i32();
             c.soft_vertices = r.read_i32();
@@ -130,8 +134,10 @@ namespace UnrealLib::Assets
             for (SkinnedVertex& v : lod.vertices)
             {
                 if (!rules.late) v.position = read_vec3(r); // before the normals below version 592
-                v.tangent = unpack_normal(r.read_u32());
-                v.normal = unpack_normal(r.read_u32());
+                v.packed_tangent = r.read_u32();
+                v.packed_normal = r.read_u32();
+                v.tangent = unpack_normal(v.packed_tangent);
+                v.normal = unpack_normal(v.packed_normal);
                 for (auto& b : v.bones) b = r.read_u8();
                 for (auto& w : v.weights) w = r.read_u8();
                 if (rules.late) v.position = read_vec3(r);
@@ -186,10 +192,17 @@ namespace UnrealLib::Assets
             if (rules.version < 686)
             {
                 lod.num_edges = static_cast<std::int32_t>(r.read_array_count(16));
-                (void)r.read_view(static_cast<std::size_t>(lod.num_edges) * 16);
+                const auto edges = r.read_view(static_cast<std::size_t>(lod.num_edges) * 16);
+                lod.edges.assign(edges.begin(), edges.end());
             }
             lod.required_bones = read_u8_array(r);
             lod.raw_point_indices = read_bulk_data(r);
+            if (lod.raw_point_indices.is_inline() && lod.raw_point_indices.size_on_disk > 0)
+            {
+                const auto bytes = r.data().subspan(r.position() - static_cast<std::size_t>(lod.raw_point_indices.size_on_disk),
+                                                    static_cast<std::size_t>(lod.raw_point_indices.size_on_disk));
+                lod.raw_point_index_bytes.assign(bytes.begin(), bytes.end());
+            }
             if (rules.version >= 709 && !rules.assets->skeletal_gpu_uv_count) (void)r.read_i32();
             read_gpu_skin(r, lod, rules);
             if (rules.late)
@@ -307,9 +320,13 @@ namespace UnrealLib::Assets
             {
                 PerPolyCollision c;
                 const BulkArrayHeader nodes = read_bulk_array_header(r, 0, "SkeletalMesh PerPolyKDOP nodes");
-                (void)r.read_view(static_cast<std::size_t>(nodes.count) * nodes.element_size);
+                const auto node_bytes = r.read_view(static_cast<std::size_t>(nodes.count) * nodes.element_size);
                 const BulkArrayHeader tris = read_bulk_array_header(r, 0, "SkeletalMesh PerPolyKDOP triangles");
-                (void)r.read_view(static_cast<std::size_t>(tris.count) * tris.element_size);
+                const auto tri_bytes = r.read_view(static_cast<std::size_t>(tris.count) * tris.element_size);
+                c.node_size = nodes.element_size;
+                c.triangle_size = tris.element_size;
+                c.node_bytes.assign(node_bytes.begin(), node_bytes.end());
+                c.triangle_bytes.assign(tri_bytes.begin(), tri_bytes.end());
                 c.kdop_nodes = static_cast<std::int32_t>(nodes.count);
                 c.kdop_triangles = static_cast<std::int32_t>(tris.count);
                 const std::uint32_t verts = r.read_array_count(12);
@@ -359,6 +376,205 @@ namespace UnrealLib::Assets
         }
         mesh.properties = source.properties;
         return mesh;
+    }
+
+    namespace
+    {
+        void write_u16_array(BinaryWriter& w, const std::vector<std::uint16_t>& values)
+        {
+            w.write_i32(static_cast<std::int32_t>(values.size()));
+            for (const std::uint16_t v : values) w.write_u16(v);
+        }
+
+        void write_i16_array(BinaryWriter& w, const std::vector<std::int16_t>& values)
+        {
+            w.write_i32(static_cast<std::int32_t>(values.size()));
+            for (const std::int16_t v : values) w.write_i16(v);
+        }
+
+        void write_u8_array(BinaryWriter& w, const std::vector<std::uint8_t>& values)
+        {
+            w.write_i32(static_cast<std::int32_t>(values.size()));
+            for (const std::uint8_t v : values) w.write_u8(v);
+        }
+
+        /// The chunk-local index of skeleton bone @p bone (its first entry in the chunk's bone map).
+        std::uint8_t local_bone(const SkeletalChunk& chunk, std::int16_t bone, std::size_t vertex)
+        {
+            const auto at = std::ranges::find(chunk.bone_map, bone);
+            if (at == chunk.bone_map.end() || at - chunk.bone_map.begin() > 255)
+            {
+                throw SerializationError(
+                    fmt::format("skeletal vertex {} uses bone {}, which its chunk doesn't map", vertex, bone));
+            }
+            return static_cast<std::uint8_t>(at - chunk.bone_map.begin());
+        }
+
+        void write_skeletal_lod(BinaryWriter& w, const SkeletalLod& lod, const AssetRules& rules, std::uint16_t version,
+                                std::uint64_t base_offset)
+        {
+            w.write_i32(static_cast<std::int32_t>(lod.sections.size()));
+            for (const SkeletalSection& s : lod.sections)
+            {
+                w.write_i16(s.material_index);
+                w.write_i16(s.chunk_index);
+                w.write_i32(s.first_index);
+                w.write_u16(static_cast<std::uint16_t>(s.num_triangles));
+            }
+            write_bulk_array_header(w, 2, lod.indices.size());
+            for (const std::uint32_t i : lod.indices) w.write_u16(static_cast<std::uint16_t>(i));
+            write_u16_array(w, lod.shadow_indices);
+            write_i16_array(w, lod.active_bones);
+            write_u8_array(w, lod.shadow_triangle_double_sided);
+            const std::size_t uv_bytes = static_cast<std::size_t>(std::max(1, int{rules.skeletal_chunk_uv_sets})) * 8;
+            w.write_i32(static_cast<std::int32_t>(lod.chunks.size()));
+            for (const SkeletalChunk& c : lod.chunks)
+            {
+                w.write_i32(c.first_vertex);
+                w.write_i32(static_cast<std::int32_t>(c.stored_rigid_bytes.size() / (12 + 12 + uv_bytes + 1)));
+                w.write_bytes(c.stored_rigid_bytes);
+                w.write_i32(static_cast<std::int32_t>(c.stored_soft_bytes.size() / (12 + 12 + uv_bytes + 8)));
+                w.write_bytes(c.stored_soft_bytes);
+                write_i16_array(w, c.bone_map);
+                w.write_i32(c.rigid_vertices);
+                w.write_i32(c.soft_vertices);
+                w.write_i32(c.max_influences);
+            }
+            w.write_i32(lod.size);
+            w.write_i32(lod.num_vertices);
+            if (lod.edges.size() % 16 != 0) throw SerializationError("SkeletalMesh edges are not 16 bytes each");
+            w.write_i32(static_cast<std::int32_t>(lod.edges.size() / 16));
+            w.write_bytes(lod.edges);
+            write_u8_array(w, lod.required_bones);
+            // A stored offset that isn't the payload's position (an empty record's, a cooker quirk, see
+            // write_static_mesh; or a package saved again by another tool) is kept; it is computed only for a new mesh.
+            BulkData raw = lod.raw_point_indices;
+            const bool keep_offset = raw.payload_offset != 0 && raw.offset_mismatch();
+            if ((raw.size_on_disk == 0 && raw.offset_in_file != 0 && lod.raw_point_index_bytes.empty()) || keep_offset)
+            {
+                w.write_u32(raw.flags);
+                w.write_i32(raw.element_count);
+                w.write_i32(static_cast<std::int32_t>(lod.raw_point_index_bytes.size()));
+                w.write_i32(raw.offset_in_file);
+                w.write_bytes(lod.raw_point_index_bytes);
+            }
+            else write_bulk_data(w, raw, lod.raw_point_index_bytes, base_offset);
+
+            if (rules.skeletal_gpu_uv_count) w.write_i32(lod.num_uv_sets);
+            else if (lod.num_uv_sets != 1)
+            {
+                throw SerializationError(fmt::format("this game's skeletal meshes have 1 UV set, not {}", lod.num_uv_sets));
+            }
+            w.write_bool32(lod.full_precision_uvs);
+            const std::uint32_t vertex_size =
+                12 + 8 + 8 + (lod.full_precision_uvs ? 8u : 4u) * static_cast<std::uint32_t>(lod.num_uv_sets);
+            write_bulk_array_header(w, vertex_size, lod.vertices.size());
+            // A vertex's chunk: the one whose range holds it
+            std::vector<const SkeletalChunk*> chunk_of(lod.vertices.size(), nullptr);
+            for (const SkeletalChunk& c : lod.chunks)
+            {
+                const auto end = static_cast<std::size_t>(c.first_vertex + c.rigid_vertices + c.soft_vertices);
+                for (auto v = static_cast<std::size_t>(c.first_vertex); v < end && v < chunk_of.size(); ++v)
+                {
+                    chunk_of[v] = &c;
+                }
+            }
+            for (std::size_t i = 0; i < lod.vertices.size(); ++i)
+            {
+                const SkinnedVertex& v = lod.vertices[i];
+                if (!chunk_of[i]) throw SerializationError(fmt::format("skeletal vertex {} is in no chunk", i));
+                write_vec3(w, v.position);
+                const bool packed = v.packed_tangent != 0 || v.packed_normal != 0;
+                w.write_u32(packed ? v.packed_tangent : pack_normal(v.tangent));
+                w.write_u32(packed ? v.packed_normal : pack_normal(v.normal));
+                for (const std::int16_t b : v.bones) w.write_u8(local_bone(*chunk_of[i], b, i));
+                for (const std::uint8_t weight : v.weights) w.write_u8(weight);
+                for (int k = 0; k < lod.num_uv_sets; ++k)
+                {
+                    const Vec2& uv = v.uv[static_cast<std::size_t>(k)];
+                    if (lod.full_precision_uvs)
+                    {
+                        w.write_f32(uv.u);
+                        w.write_f32(uv.v);
+                    }
+                    else
+                    {
+                        w.write_u16(float_to_half(uv.u));
+                        w.write_u16(float_to_half(uv.v));
+                    }
+                }
+            }
+            if (!rules.skeletal_lod_ends_after_gpu_skin && version >= 534)
+            {
+                throw UnsupportedError("skeletal ExtraVertexInfluences are not supported");
+            }
+        }
+    }
+
+    std::vector<std::byte> write_skeletal_mesh(const SkeletalMesh& mesh, const SerializationContext& context,
+                                               const AssetRules& rules,
+                                               const std::function<FName(std::string_view)>& make_name,
+                                               std::uint64_t base_offset)
+    {
+        const std::uint16_t version = context.file_version;
+        if (version < 493 || version >= 592)
+        {
+            throw UnsupportedError(
+                fmt::format("writing the SkeletalMesh layout of file version {} is not supported", version));
+        }
+        BinaryWriter w(context);
+        if (rules.skeletal_mesh_leading_int) w.write_i32(mesh.leading_value);
+        write_vec3(w, mesh.bounds.origin);
+        write_vec3(w, mesh.bounds.box_extent);
+        w.write_f32(mesh.bounds.sphere_radius);
+        w.write_i32(static_cast<std::int32_t>(mesh.materials.size()));
+        for (const ObjectIndex m : mesh.materials) w.write_i32(m.value);
+        write_vec3(w, mesh.origin);
+        for (const std::int32_t a : mesh.rotation_origin) w.write_i32(a);
+        w.write_i32(static_cast<std::int32_t>(mesh.skeleton.size()));
+        for (const MeshBone& b : mesh.skeleton)
+        {
+            write_fname(w, make_name(b.name));
+            w.write_u32(b.flags);
+            w.write_f32(b.orientation.x);
+            w.write_f32(b.orientation.y);
+            w.write_f32(b.orientation.z);
+            w.write_f32(b.orientation.w);
+            write_vec3(w, b.position);
+            w.write_i32(b.num_children);
+            w.write_i32(b.parent_index);
+            if (version >= 515)
+            {
+                w.write_u8(b.color.b);
+                w.write_u8(b.color.g);
+                w.write_u8(b.color.r);
+                w.write_u8(b.color.a);
+            }
+        }
+        w.write_i32(mesh.skeletal_depth);
+        w.write_i32(static_cast<std::int32_t>(mesh.lods.size()));
+        for (const SkeletalLod& lod : mesh.lods) write_skeletal_lod(w, lod, rules, version, base_offset);
+        w.write_i32(static_cast<std::int32_t>(mesh.name_index_map.size()));
+        for (const auto& [name, index] : mesh.name_index_map)
+        {
+            write_fname(w, make_name(name));
+            w.write_i32(index);
+        }
+        if (version >= 435)
+        {
+            w.write_i32(static_cast<std::int32_t>(mesh.per_poly_collision.size()));
+            for (const PerPolyCollision& c : mesh.per_poly_collision)
+            {
+                write_bulk_array_header(w, c.node_size, c.node_size ? c.node_bytes.size() / c.node_size : 0);
+                w.write_bytes(c.node_bytes);
+                write_bulk_array_header(w, c.triangle_size,
+                                        c.triangle_size ? c.triangle_bytes.size() / c.triangle_size : 0);
+                w.write_bytes(c.triangle_bytes);
+                w.write_i32(static_cast<std::int32_t>(c.vertices.size()));
+                for (const Vec3& v : c.vertices) write_vec3(w, v);
+            }
+        }
+        return w.take();
     }
 
     namespace

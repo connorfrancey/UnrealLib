@@ -5,12 +5,16 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <string_view>
 #include <string>
 #include <vector>
 
 #include <UnrealLib/Assets/AssetObject.hpp>
 #include <UnrealLib/Assets/BulkData.hpp>
 #include <UnrealLib/Assets/MeshTypes.hpp>
+#include <UnrealLib/Names/FName.hpp>
+#include <UnrealLib/Package/GameProfile.hpp>
 
 namespace UnrealLib::Assets
 {
@@ -43,6 +47,8 @@ namespace UnrealLib::Assets
         std::int32_t soft_vertices = 0;        ///< NumSoftVertices.
         std::size_t stored_rigid_vertices = 0; ///< Rigid vertices stored in the chunk (CPU copy; often 0 when cooked).
         std::size_t stored_soft_vertices = 0;  ///< Soft vertices stored in the chunk.
+        std::vector<std::byte> stored_rigid_bytes; ///< The stored rigid vertices as stored.
+        std::vector<std::byte> stored_soft_bytes;  ///< The stored soft vertices as stored.
         std::vector<std::int16_t> bone_map;    ///< Chunk bone index -> skeleton bone index.
         std::int32_t max_influences = 0;       ///< Maximum influences per vertex.
     };
@@ -56,6 +62,10 @@ namespace UnrealLib::Assets
         std::array<Vec2, 4> uv{};              ///< UV sets (SkeletalLod::num_uv_sets used).
         std::array<std::int16_t, 4> bones{};   ///< Skeleton bone of each influence.
         std::array<std::uint8_t, 4> weights{}; ///< Weights (0..255; sum 255).
+        /// Tangent X and Z as stored (FPackedNormal; the unpacked vectors drop the fourth byte, Z's holding the
+        /// binormal's sign). write_skeletal_mesh() writes these, or packs the vectors when both are 0 (a new vertex).
+        std::uint32_t packed_tangent = 0;
+        std::uint32_t packed_normal = 0;
     };
 
     /// @brief One LOD model.
@@ -70,8 +80,10 @@ namespace UnrealLib::Assets
         std::int32_t size = 0;                  ///< Size field.
         std::int32_t num_vertices = 0;          ///< NumVertices.
         std::int32_t num_edges = 0;             ///< Edge count (version < 686).
+        std::vector<std::byte> edges;           ///< The edges as stored, 16 bytes each.
         std::vector<std::uint8_t> required_bones; ///< Bones required by this LOD.
-        BulkData raw_point_indices;             ///< Source point indices (uncooked).
+        BulkData raw_point_indices;             ///< Source point indices (kept by cooked Mirror's Edge meshes too).
+        std::vector<std::byte> raw_point_index_bytes; ///< Their inline payload as stored.
         std::int32_t num_uv_sets = 1;           ///< UV sets in the GPU vertices.
         bool full_precision_uvs = false;        ///< GPU vertex UVs stored as floats (else halves).
         std::vector<SkinnedVertex> vertices;    ///< GPU skin vertex buffer.
@@ -85,6 +97,10 @@ namespace UnrealLib::Assets
         std::int32_t kdop_nodes = 0;     ///< kDOP tree nodes.
         std::int32_t kdop_triangles = 0; ///< kDOP tree triangles.
         std::vector<Vec3> vertices;      ///< Collision vertices.
+        std::uint32_t node_size = 0;     ///< Element size of the stored nodes.
+        std::uint32_t triangle_size = 0; ///< Element size of the stored triangles.
+        std::vector<std::byte> node_bytes;     ///< The tree's nodes as stored.
+        std::vector<std::byte> triangle_bytes; ///< The tree's triangles as stored.
     };
 
     /// @brief A SkeletalMesh export.
@@ -126,6 +142,22 @@ namespace UnrealLib::Assets
     /// @brief Reads a SkeletalMesh export. The native data must be consumed exactly.
     [[nodiscard]] SkeletalMesh read_skeletal_mesh(Linker& linker, ObjectRef object,
                                                   const PropertySchema* schema = nullptr);
+
+    /// @brief Serializes the native data of a SkeletalMesh export (everything after the tagged properties), the inverse
+    ///        of read_skeletal_mesh(): writing an unmodified mesh reproduces its native bytes exactly. Vertex bones
+    ///        are written chunk-local again, through each chunk's bone map.
+    /// @param mesh        The mesh.
+    /// @param context     Version information (the package's file version).
+    /// @param rules       The game's asset rules (the package profile's).
+    /// @param base_offset Package offset at which the native data will be written (bulk data records store absolute
+    ///                    offsets).
+    /// @param make_name   The package's name for a bone name (FName with its number).
+    /// @throws UnsupportedError for file versions outside 493..591 (Mirror's Edge is 536);
+    ///         SerializationError if a vertex uses a bone its chunk doesn't map.
+    [[nodiscard]] std::vector<std::byte> write_skeletal_mesh(const SkeletalMesh& mesh, const SerializationContext& context,
+                                                             const AssetRules& rules,
+                                                             const std::function<FName(std::string_view)>& make_name,
+                                                             std::uint64_t base_offset);
 
     /// @brief Writes LOD @p lod of @p mesh as an ActorX PSK file (points, wedges, faces, materials, skeleton,
     ///        weights). Like UE Viewer's exporter, the mesh is mirrored on Y (positions, bone positions, and

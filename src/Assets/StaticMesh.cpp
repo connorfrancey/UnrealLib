@@ -41,6 +41,58 @@ namespace UnrealLib::Assets
             else value = std::ldexp(static_cast<float>(mantissa | 0x400), static_cast<int>(exponent) - 25);
             return sign != 0 ? -value : value;
         }
+
+        std::uint32_t pack_normal(const Vec3& v) noexcept
+        {
+            const auto component = [](float f) {
+                return static_cast<std::uint32_t>(std::round((std::clamp(f, -1.0f, 1.0f) + 1.0f) * 127.5f));
+            };
+            return component(v.x) | (component(v.y) << 8) | (component(v.z) << 16) | (128u << 24);
+        }
+
+        /// Round to nearest even; the inverse of half_to_float() for every finite half and the infinities.
+        std::uint16_t float_to_half(float f) noexcept
+        {
+            std::uint32_t x = 0;
+            std::memcpy(&x, &f, 4);
+            const std::uint32_t sign = (x >> 16) & 0x8000;
+            const std::uint32_t raw_exponent = (x >> 23) & 0xFF;
+            std::uint32_t mantissa = x & 0x7FFFFF;
+            if (raw_exponent == 0xFF)
+            {
+                const std::uint32_t payload = mantissa >> 13; // half_to_float() put a half's NaN payload there
+                return static_cast<std::uint16_t>(sign | 0x7C00 | (mantissa == 0 ? 0 : payload != 0 ? payload : 0x200));
+            }
+            const std::int32_t exponent = static_cast<std::int32_t>(raw_exponent) - 127 + 15;
+            if (exponent >= 31) return static_cast<std::uint16_t>(sign | 0x7C00);
+            if (exponent <= 0)
+            {
+                if (exponent < -10) return static_cast<std::uint16_t>(sign);
+                mantissa |= 0x800000;
+                const int shift = 14 - exponent;
+                std::uint32_t h = mantissa >> shift;
+                const std::uint32_t rest = mantissa & ((1u << shift) - 1), half = 1u << (shift - 1);
+                if (rest > half || (rest == half && (h & 1) != 0)) ++h;
+                return static_cast<std::uint16_t>(sign | h);
+            }
+            std::uint32_t h = (static_cast<std::uint32_t>(exponent) << 10) | (mantissa >> 13);
+            const std::uint32_t rest = mantissa & 0x1FFF;
+            if (rest > 0x1000 || (rest == 0x1000 && (h & 1) != 0)) ++h; // a carry into the exponent is right
+            return static_cast<std::uint16_t>(sign | h);
+        }
+
+        void write_vec3(BinaryWriter& w, const Vec3& v)
+        {
+            w.write_f32(v.x);
+            w.write_f32(v.y);
+            w.write_f32(v.z);
+        }
+
+        void write_bulk_array_header(BinaryWriter& w, std::uint32_t element_size, std::size_t count)
+        {
+            w.write_i32(static_cast<std::int32_t>(element_size));
+            w.write_i32(static_cast<std::int32_t>(count));
+        }
     }
 
     using namespace detail;
@@ -306,58 +358,6 @@ namespace UnrealLib::Assets
 
     namespace
     {
-        std::uint32_t pack_normal(const Vec3& v) noexcept
-        {
-            const auto component = [](float f) {
-                return static_cast<std::uint32_t>(std::round((std::clamp(f, -1.0f, 1.0f) + 1.0f) * 127.5f));
-            };
-            return component(v.x) | (component(v.y) << 8) | (component(v.z) << 16) | (128u << 24);
-        }
-
-        /// Round to nearest even; the inverse of half_to_float() for every finite half and the infinities.
-        std::uint16_t float_to_half(float f) noexcept
-        {
-            std::uint32_t x = 0;
-            std::memcpy(&x, &f, 4);
-            const std::uint32_t sign = (x >> 16) & 0x8000;
-            const std::uint32_t raw_exponent = (x >> 23) & 0xFF;
-            std::uint32_t mantissa = x & 0x7FFFFF;
-            if (raw_exponent == 0xFF)
-            {
-                const std::uint32_t payload = mantissa >> 13; // half_to_float() put a half's NaN payload there
-                return static_cast<std::uint16_t>(sign | 0x7C00 | (mantissa == 0 ? 0 : payload != 0 ? payload : 0x200));
-            }
-            const std::int32_t exponent = static_cast<std::int32_t>(raw_exponent) - 127 + 15;
-            if (exponent >= 31) return static_cast<std::uint16_t>(sign | 0x7C00);
-            if (exponent <= 0)
-            {
-                if (exponent < -10) return static_cast<std::uint16_t>(sign);
-                mantissa |= 0x800000;
-                const int shift = 14 - exponent;
-                std::uint32_t h = mantissa >> shift;
-                const std::uint32_t rest = mantissa & ((1u << shift) - 1), half = 1u << (shift - 1);
-                if (rest > half || (rest == half && (h & 1) != 0)) ++h;
-                return static_cast<std::uint16_t>(sign | h);
-            }
-            std::uint32_t h = (static_cast<std::uint32_t>(exponent) << 10) | (mantissa >> 13);
-            const std::uint32_t rest = mantissa & 0x1FFF;
-            if (rest > 0x1000 || (rest == 0x1000 && (h & 1) != 0)) ++h; // a carry into the exponent is right
-            return static_cast<std::uint16_t>(sign | h);
-        }
-
-        void write_vec3(BinaryWriter& w, const Vec3& v)
-        {
-            w.write_f32(v.x);
-            w.write_f32(v.y);
-            w.write_f32(v.z);
-        }
-
-        void write_bulk_array_header(BinaryWriter& w, std::uint32_t element_size, std::size_t count)
-        {
-            w.write_i32(static_cast<std::int32_t>(element_size));
-            w.write_i32(static_cast<std::int32_t>(count));
-        }
-
         void write_index_buffer(BinaryWriter& w, const std::vector<std::uint16_t>& indices)
         {
             write_bulk_array_header(w, 2, indices.size());
