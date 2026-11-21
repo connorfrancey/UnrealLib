@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Names/NameTable.hpp>
 #include <UnrealLib/Objects/ObjectFlags.hpp>
@@ -73,7 +75,7 @@ TEST(ObjectHeaderTests, PlainObjectHasOnlyNetIndex)
     EXPECT_EQ(header.properties_offset, 4u);
 }
 
-TEST(ReflectionTests, ReadsMetadataFieldPathsAndObjectReferences)
+TEST(ReflectionTests, RoundTripsMetadataFieldPathsAndObjectReferences)
 {
     NameTable names;
     const FName none{names.add("None"), 0};
@@ -103,6 +105,9 @@ TEST(ReflectionTests, ReadsMetadataFieldPathsAndObjectReferences)
 
         BinaryReader reader(writer.data(), ctx(version));
         const auto object = read_field(reader, *kind, PropertyType::Unknown, {}, options);
+        BinaryWriter rewritten(ctx(version));
+        write_field(rewritten, object, {}, {}, FieldWriteOptions{none});
+        EXPECT_TRUE(std::ranges::equal(rewritten.data(), writer.data()));
         ASSERT_EQ(object.metadata.size(), 1u);
         const auto& entry = object.metadata.front();
         if (version == 540)

@@ -15,6 +15,7 @@ was changed, and what is intentionally left as it is. The reference documentatio
 | `Properties/` | `UnrealLib` | property tags, typed values, `PropertySchema`, reading/writing/formatting/parsing values |
 | `Bytecode/`, `Reflection/`, `Decompiler/` | `UnrealLib` | token decoding, UField/UStruct/UClass data, UnrealScript decompiler |
 | `Linker/` | `UnrealLib` | cross-package resolution (`Linker`, `ObjectRef`), `ReflectionSchema` |
+| `Compiler/` | `UnrealLib::Compiler` | UnrealScript body compilation and class package generation |
 | `Assets/` | `UnrealLib::Assets` | textures, sounds, meshes, animations, materials, brushes |
 | `Writer/` | `UnrealLib` | `PackageModel`, `write_package`, `replace_properties` |
 | `T3D/` | `UnrealLib::T3D` | T3D document model, parser, serializer, validation, export and import |

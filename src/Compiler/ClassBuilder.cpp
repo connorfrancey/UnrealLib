@@ -1426,7 +1426,8 @@ namespace UnrealLib::Compiler
                 else if (n == "delegate")
                 {
                     simple(PropertyType::Delegate, "DelegateProperty");
-                    if (const auto own = m_class_funcs.find(lower(t.meta)); own != m_class_funcs.end()) r.reference = own->second.index;
+                    if (const auto method = m_class_funcs.find(lower(t.meta)); method != m_class_funcs.end())
+                        r.reference = method->second.index;
                     else if (const auto f = M.member(m_parent, t.meta, [&](ObjectRef x) { return M.is_function(x); }))
                         r.reference = import_of(*f);
                     else if (const ObjectRef d = find_delegate(t.meta); d.valid())     // Another class's (an interface's)

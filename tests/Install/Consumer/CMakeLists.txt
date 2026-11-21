@@ -9,3 +9,7 @@ target_compile_features(consumer PRIVATE cxx_std_20)
 # One module on its own and the umbrella target.
 target_link_libraries(consumer PRIVATE UnrealLib::T3D UnrealLib::UnrealLib)
 target_compile_definitions(consumer PRIVATE UNREALLIB_EXPECTED_VERSION="${UNREALLIB_EXPECTED_VERSION}")
+
+add_executable(compiler_consumer compiler.cpp)
+target_compile_features(compiler_consumer PRIVATE cxx_std_20)
+target_link_libraries(compiler_consumer PRIVATE UnrealLib::Compiler)

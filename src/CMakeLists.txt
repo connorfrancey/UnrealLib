@@ -124,7 +124,9 @@ unreallib_add_module(Compiler
         PUBLIC_DEPS
             UnrealLib::Bytecode
             UnrealLib::Linker
-            UnrealLib::Reflection)
+            UnrealLib::Reflection
+        PRIVATE_DEPS
+            UnrealLib::Writer)
 
 unreallib_add_module(Assets
         SOURCES

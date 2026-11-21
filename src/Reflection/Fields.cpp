@@ -553,6 +553,32 @@ namespace UnrealLib
             writer.write_fstring(text.text);
             return;
         }
+        if (field.kind == FieldKind::MetaData)
+        {
+            writer.write_i32(static_cast<std::int32_t>(field.metadata.size()));
+            for (const FieldMetadata& entry : field.metadata)
+            {
+                if (v <= 540)
+                {
+                    const auto* path = std::get_if<FString>(&entry.field);
+                    if (path == nullptr) throw SerializationError("metadata field must be a path", writer.position());
+                    writer.write_fstring(*path);
+                }
+                else
+                {
+                    const auto* index = std::get_if<ObjectIndex>(&entry.field);
+                    if (index == nullptr) throw SerializationError("metadata field must be an object index", writer.position());
+                    writer.write_index(index->value);
+                }
+                writer.write_i32(static_cast<std::int32_t>(entry.tags.size()));
+                for (const auto& [name, value] : entry.tags)
+                {
+                    write_fname(writer, name);
+                    writer.write_fstring(value);
+                }
+            }
+            return;
+        }
 
         // UField
         if (v < vSuperReferenceMovedToUStruct)
@@ -702,7 +728,8 @@ namespace UnrealLib
             }
             break;
         }
-        case FieldKind::TextBuffer: break;
+        case FieldKind::TextBuffer:
+        case FieldKind::MetaData: break;
         }
     }
 }

@@ -40,3 +40,7 @@ run("${CMAKE_COMMAND}" --build "${consumer_build}" --config "${CONFIG}")
 find_program(consumer_exe consumer PATHS "${consumer_build}" "${consumer_build}/${CONFIG}" NO_DEFAULT_PATH REQUIRED)
 run("${consumer_exe}")
 message(STATUS "${last_output}")
+
+find_program(compiler_exe compiler_consumer PATHS "${consumer_build}" "${consumer_build}/${CONFIG}"
+    NO_DEFAULT_PATH REQUIRED)
+run("${compiler_exe}")
