@@ -58,11 +58,13 @@
 #include <UnrealLib/Assets/Font.hpp>
 #include <UnrealLib/Assets/Image.hpp>
 #include <UnrealLib/Assets/Material.hpp>
+#include <UnrealLib/Assets/Particle.hpp>
 #include <UnrealLib/Assets/MeshTypes.hpp>
 #include <UnrealLib/Assets/SkeletalMesh.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
 #include <UnrealLib/Assets/StaticMesh.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
+#include <UnrealLib/Assets/Vehicle.hpp>
 
 #include <UnrealLib/T3D/T3D.hpp>
 #include <UnrealLib/Writer/PackageWriter.hpp>

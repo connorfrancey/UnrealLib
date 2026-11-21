@@ -122,11 +122,13 @@ unreallib_add_module(Assets
             Assets/Font.cpp
             Assets/Image.cpp
             Assets/Material.cpp
+            Assets/Particle.cpp
             Assets/MeshReading.hpp
             Assets/SkeletalMesh.cpp
             Assets/Sound.cpp
             Assets/StaticMesh.cpp
             Assets/Texture.cpp
+            Assets/Vehicle.cpp
         PUBLIC_DEPS
             UnrealLib::Linker
             UnrealLib::Properties)

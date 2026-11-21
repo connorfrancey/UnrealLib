@@ -3,8 +3,8 @@
 `UnrealLib::Assets` (CMake target `UnrealLib::Assets`) deserializes the native data of asset objects and exports it
 to common formats. Deserialization (`read_*`) is separate from decoding (`decode_*`) and export (`to_*`).
 
-Every reader takes the object's metadata from its tagged script properties and requires its native data to be
-consumed **exactly**: a reader that stops early or runs past the export is an error, never silently accepted.
+Readers take asset metadata from tagged script properties. Readers for complete native layouts verify exact
+consumption. Metadata readers and native prefix readers expose where the remaining data begins.
 
 | Class | Reader | Export | Mirror's Edge verification |
 |-------|--------|--------|----------------------------|
@@ -22,11 +22,31 @@ consumed **exactly**: a reader that stops early or runs past the export is an er
 | Model | `read_model` (up to the Polys reference) | — | 9,392 parse (41,850 BSP surfaces, zones included); every surface indexes the decoded points/vectors; the Polys reference is a Polys |
 | ModelComponent | `read_model_component` | Model reference and zone index (file version 536) | All 2,572 components reference a Model |
 | Material, MaterialInstanceConstant, MaterialInstanceTimeVarying | `read_material` | JSON metadata | 29,392 read with a ReflectionSchema; every parameter array decodes (21,821 parameters, 84,137 texture references, 391,680 expressions) |
+| ParticleSystem, ParticleEmitter, ParticleLODLevel | `read_particle_system`, `read_particle_emitter`, `read_particle_lod_level` | JSON emitter, LOD and module links | 3,320 systems, 16,281 emitter links, 53,882 LOD links, and 480,847 module array links |
+| Vehicle, SVehicleWheel, SVehicleSimBase, SkelControlWheel, vehicle factories and related Kismet actions | `read_vehicle_object` | JSON properties and links | 17 helicopter factories and 16 helicopter factory actions, plus class defaults covering gunner seats, wheel settings and car simulation |
 
-The checks run in `MirrorsEdgeAssetTests.FullCorpusAssets`, `.FullCorpusMaterials` and `.FullCorpusBrushes` (`UNREALLIB_FIXTURE_SWEEP=1`,
+The checks run in `MirrorsEdgeAssetTests.FullCorpusAssets`, `.FullCorpusMaterials`, `.FullCorpusBrushes`,
+`.FullCorpusParticles` and `.FullCorpusVehicles` (`UNREALLIB_FIXTURE_SWEEP=1`,
 about two minutes in Release). `UNREALLIB_ASSET_DUMP=<dir>` writes a sample of decoded textures, meshes and skeletal
 meshes for manual review (game-derived output: never commit it).
 `UNREALLIB_ASSET_CLASS` limits `FullCorpusAssets` to one asset class when verifying a specific reader.
+
+## Particle and vehicle metadata
+
+Register the game's script packages with a `ReflectionSchema` to decode the arrays used by these readers.
+Particle links preserve serialized order and null slots. Resolved modules can be opened with `open_asset`
+to inspect their tagged settings. Vehicle objects expose tagged settings, selected object links and the
+`VehicleSeat` and `GunnerSeat` arrays. Use the same reader on a class default object to inspect defaults.
+Backdrop vehicles in Mirror's Edge also appear as static meshes and Matinee actors in prefabs, whose
+classes are available through the existing mesh and tagged-property readers.
+
+```powershell
+UnrealPackageExtractor "$cooked/Effects/FX_SmokeEffects.upk" --search-path $cooked --types particles -o out
+UnrealPackageExtractor "$cooked/TdGame.u" --search-path $cooked --types vehicles -o out
+```
+
+These opt-in types write `.particle.json` and `.vehicle.json` files. The vehicle option includes class defaults.
+Vehicle property values in JSON use UnrealScript defaultproperties syntax.
 
 ## Sources
 
@@ -77,6 +97,7 @@ BC5, G16, V8U8, A1 and the float formats. Unit tests check every BC block mode a
 * `read_model` stops after the Polys reference: BSP nodes and verts are skipped by size, and leaf hulls, leaves,
   portal nodes, the vertex buffer and lighting data after Polys are not decoded. File versions other than 536 are
   rejected for Model, and FPoly layouts < 78 or ≥ 600 for Polys.
-* Fonts, terrain, physics assets, particle systems and level data are not deserialized beyond their
-  properties. Audio is extracted, not decoded (Ogg Vorbis is a standard format).
+* Native terrain, physics asset and level data remain open. The particle and vehicle readers cover
+  serialized properties and links. Particle simulation, native distribution data and vehicle physics
+  execution remain outside those readers. Audio is extracted in its stored container.
 * LZX-compressed bulk data (Xbox 360) is not supported.

@@ -5,6 +5,8 @@
 //   static meshes: Wavefront OBJ (LOD 0); skeletal meshes: ActorX PSK (LOD 0, with skeleton and weights)
 //   animations: one ActorX PSA per AnimSet (all its sequences)
 //   materials: <Name>.mat.json (parent, parameters, textures; compiled shaders are not decoded)
+//   particles: <Name>.particle.json (emitter, LOD and module links)
+//   vehicles: <Name>.vehicle.json (tagged properties and resolved links, including class defaults)
 //   levels: <Package>/<Package>.t3d (the actors of every Level export, with their subobjects, as T3D text)
 //
 // Output: <output>/<Package>/<Outer path>/<Name>.<ext>. Mips streamed from other packages are found through the
@@ -17,6 +19,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <CLI/CLI.hpp>
@@ -41,6 +44,8 @@ namespace
         bool meshes = true;
         bool animations = true;
         bool materials = true;
+        bool particles = false;
+        bool vehicles = false;
         bool levels = true;
         std::string filter;
         bool quiet = false;
@@ -202,6 +207,89 @@ namespace
         ++totals.written;
     }
 
+    nlohmann::ordered_json asset_link_json(Linker& linker, ObjectIndex index, const Resolution& resolution)
+    {
+        if (index.is_null()) return nullptr;
+        if (resolution.status == ResolveStatus::Export)
+        {
+            const ObjectRef target = resolution.target;
+            return {{"path", linker.qualified_path(target)}, {"class", target.package->class_name(target.index)}};
+        }
+        return {{"index", index.value}, {"status", to_string(resolution.status)}, {"detail", resolution.detail}};
+    }
+
+    void extract_particles(Linker& linker, ObjectRef ref, const fs::path& root, const PropertySchema& schema,
+                           Totals& totals)
+    {
+        using Json = nlohmann::ordered_json;
+        const ParticleSystem system = read_particle_system(linker, ref, schema);
+        const auto link_json = [&](const ParticleLink& link) {
+            return asset_link_json(linker, link.index, link.resolution);
+        };
+        Json emitters = Json::array();
+        for (const ParticleLink& emitter_link : system.emitters)
+        {
+            Json emitter_json = link_json(emitter_link);
+            if (emitter_link.resolution.status == ResolveStatus::Export)
+            {
+                const ParticleEmitter emitter = read_particle_emitter(linker, emitter_link.resolution.target, schema);
+                Json levels = Json::array();
+                for (const ParticleLink& lod_link : emitter.lod_levels)
+                {
+                    Json lod_json = link_json(lod_link);
+                    if (lod_link.resolution.status == ResolveStatus::Export)
+                    {
+                        const ParticleLodLevel lod = read_particle_lod_level(linker, lod_link.resolution.target, schema);
+                        if (const auto level = lod.source.properties.get_int("Level")) lod_json["level"] = *level;
+                        if (const auto enabled = lod.source.properties.get_bool("bEnabled")) lod_json["enabled"] = *enabled;
+                        lod_json["required_module"] = link_json(lod.required_module);
+                        lod_json["spawn_module"] = link_json(lod.spawn_module);
+                        lod_json["type_data_module"] = link_json(lod.type_data_module);
+                        Json modules = Json::array();
+                        for (const ParticleLink& module : lod.modules)
+                        {
+                            modules.push_back(link_json(module));
+                        }
+                        lod_json["modules"] = std::move(modules);
+                    }
+                    levels.push_back(std::move(lod_json));
+                }
+                emitter_json["lod_levels"] = std::move(levels);
+            }
+            emitters.push_back(std::move(emitter_json));
+        }
+        const Json json{{"object", linker.qualified_path(ref)}, {"emitters", std::move(emitters)}};
+        const std::string text = json.dump(2) + "\n";
+        write_file(output_path(root, *ref.package, ref.index, "particle.json"), std::as_bytes(std::span(text)));
+        ++totals.written;
+    }
+
+    void extract_vehicle(Linker& linker, ObjectRef ref, const fs::path& root, const PropertySchema& schema,
+                         Totals& totals)
+    {
+        using Json = nlohmann::ordered_json;
+        const VehicleObject vehicle = read_vehicle_object(linker, ref, schema);
+        PropertyFormatOptions format{&ref.package->names(), {}};
+        Json properties = Json::array();
+        for (const Property& property : vehicle.source.properties.all())
+        {
+            properties.push_back({{"name", property.name}, {"array_index", property.array_index},
+                                  {"value", format_property_value(property.value, format)}});
+        }
+        Json links = Json::array();
+        for (const VehicleLink& link : vehicle.links)
+        {
+            Json entry{{"property", link.property}, {"target", asset_link_json(linker, link.index, link.resolution)}};
+            if (link.array_index) entry["array_index"] = *link.array_index;
+            links.push_back(std::move(entry));
+        }
+        const Json json{{"object", linker.qualified_path(ref)}, {"class", vehicle.source.class_name},
+                        {"properties", std::move(properties)}, {"links", std::move(links)}};
+        const std::string text = json.dump(2) + "\n";
+        write_file(output_path(root, *ref.package, ref.index, "vehicle.json"), std::as_bytes(std::span(text)));
+        ++totals.written;
+    }
+
     /// Writes <Package>/<Package>.t3d if the package has a Level export (no-op otherwise).
     void extract_levels(Linker& linker, const Package& package, const fs::path& root, const PropertySchema* schema,
                         const Settings& settings, Totals& totals)
@@ -242,7 +330,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    CLI::App app{"Extract assets (textures, sounds, meshes, animations, materials) from an Unreal Engine 3 package (UnrealLib)",
+    CLI::App app{"Extract assets from an Unreal Engine 3 package (UnrealLib)",
                  "UnrealPackageExtractor"};
     argv = app.ensure_utf8(argv);
 
@@ -259,8 +347,10 @@ int main(int argc, char** argv)
     app.add_option("-s,--search-path", search_paths,
                    "Directories with the game's packages (default: the package's directory and the nearest parent with Core.u)")
         ->check(CLI::ExistingDirectory);
-    app.add_option("-t,--types", types, "Asset types to extract: textures, sounds, meshes, animations, materials, levels")
-        ->check(CLI::IsMember({"textures", "sounds", "meshes", "animations", "materials", "levels"}))
+    app.add_option("-t,--types", types,
+                   "Asset types to extract: textures, sounds, meshes, animations, materials, levels, particles, vehicles")
+        ->check(CLI::IsMember({"textures", "sounds", "meshes", "animations", "materials", "levels", "particles",
+                               "vehicles"}))
         ->delimiter(',');
     app.add_option("--texture-format", settings.texture_format, "png, tga or dds (dds keeps every mip losslessly)")
         ->check(CLI::IsMember({"png", "tga", "dds"}));
@@ -273,6 +363,8 @@ int main(int argc, char** argv)
     settings.meshes = std::find(types.begin(), types.end(), "meshes") != types.end();
     settings.animations = std::find(types.begin(), types.end(), "animations") != types.end();
     settings.materials = std::find(types.begin(), types.end(), "materials") != types.end();
+    settings.particles = std::find(types.begin(), types.end(), "particles") != types.end();
+    settings.vehicles = std::find(types.begin(), types.end(), "vehicles") != types.end();
     settings.levels = std::find(types.begin(), types.end(), "levels") != types.end();
 
     try
@@ -302,10 +394,9 @@ int main(int argc, char** argv)
         }
         for (const auto& dir : search_paths) linker.add_search_path(Tools::utf8_path(dir));
         const Package& package = linker.load(file);
-        // Type information for material parameter arrays and level actors: the script packages found through the
-        // search paths.
+        // Resolve reflected property types for the readers that need them.
         std::unique_ptr<ReflectionSchema> schema;
-        if (settings.materials || settings.levels)
+        if (settings.materials || settings.levels || settings.particles || settings.vehicles)
         {
             schema = std::make_unique<ReflectionSchema>(linker);
             for (const char* script : {"Core", "Engine", "GameFramework", "TdGame"})
@@ -316,15 +407,24 @@ int main(int argc, char** argv)
         const fs::path root = Tools::utf8_path(output);
 
         Totals totals;
+        std::unordered_map<std::int32_t, bool> vehicle_classes;
         const std::string filter = Text::to_lower_ascii(settings.filter);
         for (std::size_t i = 0; i < package.exports().size(); ++i)
         {
             const ObjectRef ref{&package, ObjectIndex::from_export(i)};
             const ExportEntry& entry = package.exports()[i];
-            if (entry.serial_size <= 0 || (entry.object_flags & ObjectFlag::ClassDefaultObject) != 0)
+            if (entry.serial_size <= 0)
             {
                 continue;
             }
+            bool vehicle = false;
+            if (settings.vehicles && !entry.class_index.is_null())
+            {
+                const auto [cached, inserted] = vehicle_classes.try_emplace(entry.class_index.value, false);
+                if (inserted) cached->second = vehicle_object_kind(linker, ref).has_value();
+                vehicle = cached->second;
+            }
+            if (!vehicle && (entry.object_flags & ObjectFlag::ClassDefaultObject) != 0) continue;
             const std::string cls = package.class_name(ref.index);
             const bool texture = settings.textures && is_texture2d_class(cls);
             const bool sound = settings.sounds && cls == "SoundNodeWave";
@@ -334,7 +434,8 @@ int main(int argc, char** argv)
                 settings.animations && (cls == "AnimSet" || linker.is_a(ref, "Engine.AnimSet").value_or(false));
             const bool material = settings.materials && (cls == "Material" || cls == "MaterialInstanceConstant" ||
                                                          cls == "MaterialInstanceTimeVarying");
-            if (!texture && !sound && !mesh && !skeletal && !anim_set && !material)
+            const bool particle = settings.particles && cls == "ParticleSystem";
+            if (!texture && !sound && !mesh && !skeletal && !anim_set && !material && !particle && !vehicle)
             {
                 continue;
             }
@@ -351,6 +452,8 @@ int main(int argc, char** argv)
                 else if (skeletal) extract_skeletal_mesh(linker, package, ref, root, totals);
                 else if (anim_set) extract_anim_set(linker, package, ref, root, totals);
                 else if (material) extract_material(linker, package, ref, root, schema.get(), totals);
+                else if (particle) extract_particles(linker, ref, root, *schema, totals);
+                else if (vehicle) extract_vehicle(linker, ref, root, *schema, totals);
                 else extract_sound(linker, package, ref, root, totals);
                 if (!settings.quiet && totals.written != before)
                 {

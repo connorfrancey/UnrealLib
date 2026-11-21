@@ -42,10 +42,12 @@ purpose. The numbers come from the corpus sweeps (`UNREALLIB_FIXTURE_SWEEP=1`) a
 | Skeletal meshes | no reader | yes (ActorX PSK) | 742 parse |
 | Animations | no reader | AnimSequence/AnimSet (ActorX PSA) | 6,938 sequences decode |
 | Materials | object data | parameters, textures, expressions (JSON) | 29,392 read |
+| Particle systems | object data | emitter, LOD and module links (JSON) | 3,320 systems, 480,847 module array links |
+| Vehicle objects | object data | actor settings, wheels, seats, simulation and helicopter factory metadata (JSON) | 17 helicopter factories, 16 factory actions and vehicle class defaults |
 | Brushes (Polys, Model) | yes | Polys read/write; Model up to its Polys reference | All 9,392 of each; `write_polys` byte-identical |
 | BSP ModelComponent | Model and ZoneIndex | Model and ZoneIndex for file version 536 | All 2,572 components reference a Model |
 | Fonts | `UFont` and `UMultiFont` | Native glyphs, remapping, the pre-511 MultiFont resolution table, and Mirror's Edge kerning tables. Tagged glyph and texture arrays from version 511 | All 85 Font and 270 MultiFont exports parse. Synthetic coverage spans the upstream font version boundaries |
-| Remaining BSP, terrain, particles, physics assets | varies by class and branch | native bytes preserved | BSP readers cover the prefixes listed above |
+| Remaining BSP, terrain, physics assets | varies by class and branch | native bytes preserved | BSP readers cover the prefixes listed above |
 | T3D export | yes (`Eliot.UELib.Decompiler.T3D`, brushes included) | levels and objects, brushes included | 680 levels, 152,965 actors, 7,958 brushes; exact text round trip |
 | T3D import into packages | no | existing objects (properties, brush polygons) | Every level's unmodified export re-imports with 0 changes (338,507 objects); edits round-trip through write → reload → export |
 | Package writing | summary/table serializers (`PackageSerializer`) | `PackageModel` + `write_package` (uncompressed, LZO, zlib) | All 873 uncompressed packages rewritten byte-identically; all 1,553 compressed ones reload with identical tables and export data |

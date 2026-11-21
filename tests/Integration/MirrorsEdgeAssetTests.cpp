@@ -22,10 +22,12 @@
 #include <UnrealLib/Assets/Font.hpp>
 #include <UnrealLib/Assets/Image.hpp>
 #include <UnrealLib/Assets/Material.hpp>
+#include <UnrealLib/Assets/Particle.hpp>
 #include <UnrealLib/Assets/SkeletalMesh.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
 #include <UnrealLib/Assets/StaticMesh.hpp>
 #include <UnrealLib/Assets/Texture.hpp>
+#include <UnrealLib/Assets/Vehicle.hpp>
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Linker/Linker.hpp>
 #include <UnrealLib/Linker/ReflectionSchema.hpp>
@@ -553,6 +555,193 @@ TEST(MirrorsEdgeAssetTests, FullCorpusMaterials)
     EXPECT_EQ(failures, 0u);
     EXPECT_EQ(undecoded, 0u);
     EXPECT_EQ(unnamed, 0u);
+}
+
+TEST(MirrorsEdgeAssetTests, FullCorpusParticles)
+{
+    if (!fixtures_available() || env("UNREALLIB_FIXTURE_SWEEP") != "1")
+    {
+        GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_FIXTURE_SWEEP=1";
+    }
+    constexpr std::size_t batch = 32;
+    const auto files = packages(true);
+    std::size_t systems = 0, emitters = 0, lods = 0, modules = 0, failures = 0;
+    for (std::size_t first = 0; first < files.size(); first += batch)
+    {
+        Linker linker;
+        linker.add_search_path(fixture_dir());
+        ReflectionSchema schema(linker);
+        for (const Package* script : load_script_packages(linker)) schema.add_package(*script);
+        for (std::size_t f = first; f < std::min(files.size(), first + batch); ++f)
+        {
+            const Package& package = linker.load(files[f]);
+            for (std::size_t i = 0; i < package.exports().size(); ++i)
+            {
+                const ObjectRef ref{&package, ObjectIndex::from_export(i)};
+                if (ref.export_entry().serial_size <= 0 || package.class_name(ref.index) != "ParticleSystem" ||
+                    (ref.export_entry().object_flags & ObjectFlag::ClassDefaultObject) != 0)
+                {
+                    continue;
+                }
+                try
+                {
+                    const auto check_link = [&](const ParticleLink& link, std::string_view class_path) {
+                        if (link.index.is_null()) return false;
+                        const bool valid = link.resolution.status == ResolveStatus::Export &&
+                                           linker.is_a(link.resolution.target, class_path).value_or(false);
+                        if (!valid && failures++ < 10)
+                        {
+                            ADD_FAILURE() << linker.qualified_path(ref) << ": bad " << class_path << " link "
+                                          << link.index.value << " (" << to_string(link.resolution.status) << ")";
+                        }
+                        return valid;
+                    };
+                    const ParticleSystem system = read_particle_system(linker, ref, schema);
+                    ++systems;
+                    for (const ParticleLink& emitter_link : system.emitters)
+                    {
+                        if (!check_link(emitter_link, "Engine.ParticleEmitter")) continue;
+                        const ParticleEmitter emitter = read_particle_emitter(linker, emitter_link.resolution.target, schema);
+                        ++emitters;
+                        for (const ParticleLink& lod_link : emitter.lod_levels)
+                        {
+                            if (!check_link(lod_link, "Engine.ParticleLODLevel")) continue;
+                            const ParticleLodLevel lod = read_particle_lod_level(linker, lod_link.resolution.target, schema);
+                            ++lods;
+                            check_link(lod.required_module, "Engine.ParticleModuleRequired");
+                            check_link(lod.spawn_module, "Engine.ParticleModuleSpawn");
+                            check_link(lod.type_data_module, "Engine.ParticleModuleTypeDataBase");
+                            for (const ParticleLink& module : lod.modules)
+                            {
+                                if (check_link(module, "Engine.ParticleModule")) ++modules;
+                            }
+                        }
+                    }
+                }
+                catch (const Error& e)
+                {
+                    if (failures++ < 10) ADD_FAILURE() << linker.qualified_path(ref) << ": " << e.what();
+                }
+            }
+        }
+    }
+    std::cout << "  particle systems: " << systems << ", emitter links: " << emitters
+              << ", LOD links: " << lods << ", module array links: " << modules << '\n';
+    EXPECT_GT(systems, 0u);
+    EXPECT_GT(emitters, 0u);
+    EXPECT_GT(lods, 0u);
+    EXPECT_GT(modules, 0u);
+    EXPECT_EQ(failures, 0u);
+}
+
+TEST(MirrorsEdgeAssetTests, VehicleDefaults)
+{
+    if (!fixtures_available()) GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR";
+
+    Linker linker;
+    linker.add_search_path(fixture_dir());
+    ReflectionSchema schema(linker);
+    for (const Package* script : load_script_packages(linker)) schema.add_package(*script);
+    const Package* td_game = linker.find_package("TdGame");
+    const Package* engine = linker.find_package("Engine");
+    ASSERT_NE(td_game, nullptr);
+    ASSERT_NE(engine, nullptr);
+
+    const auto read_default = [&](const Package& package, std::string_view name) {
+        for (std::size_t i = 0; i < package.exports().size(); ++i)
+        {
+            const ObjectIndex index = ObjectIndex::from_export(i);
+            if (package.object_name(index) == name) return read_vehicle_object(linker, {&package, index}, schema);
+        }
+        throw Error(ErrorCode::NotFound, std::string(name));
+    };
+
+    const auto helicopter = read_default(*td_game, "Default__TdVehicle_Helicopter");
+    EXPECT_EQ(helicopter.kind, VehicleObjectKind::Vehicle);
+    EXPECT_GT(helicopter.source.properties.get_float("MaxVelocity").value_or(0), 0);
+    ASSERT_FALSE(helicopter.seats.empty());
+    for (const VehicleSeat& seat : helicopter.seats)
+    {
+        EXPECT_EQ(seat.struct_name, "GunnerSeat");
+        EXPECT_TRUE(seat.character_socket.has_value() || seat.character_bone.has_value());
+    }
+
+    const auto wheel = read_default(*engine, "Default__SVehicleWheel");
+    EXPECT_EQ(wheel.kind, VehicleObjectKind::Wheel);
+    EXPECT_GT(wheel.source.properties.get_float("WheelRadius").value_or(0), 0);
+    EXPECT_EQ(read_default(*engine, "Default__SVehicleSimCar").kind, VehicleObjectKind::Simulation);
+
+    const auto factory = read_default(*td_game, "Default__TdActorFactoryHelicopter");
+    EXPECT_EQ(factory.kind, VehicleObjectKind::Factory);
+    EXPECT_TRUE(std::any_of(factory.links.begin(), factory.links.end(), [](const VehicleLink& link) {
+        return link.property == "VehicleClass" && link.resolution.status == ResolveStatus::Export &&
+               link.resolution.target.package->object_name(link.resolution.target.index) == "TdVehicle_Helicopter";
+    }));
+    EXPECT_EQ(read_default(*td_game, "Default__SeqAct_TdHelicopterFactory").kind,
+              VehicleObjectKind::HelicopterFactoryAction);
+}
+
+TEST(MirrorsEdgeAssetTests, FullCorpusVehicles)
+{
+    if (!fixtures_available() || env("UNREALLIB_FIXTURE_SWEEP") != "1")
+    {
+        GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_FIXTURE_SWEEP=1";
+    }
+
+    constexpr std::size_t batch = 32;
+    const auto files = packages(true);
+    std::map<std::string, std::size_t> classes;
+    std::size_t seats = 0, links = 0, failures = 0;
+    for (std::size_t first = 0; first < files.size(); first += batch)
+    {
+        Linker linker;
+        linker.add_search_path(fixture_dir());
+        ReflectionSchema schema(linker);
+        for (const Package* script : load_script_packages(linker)) schema.add_package(*script);
+        for (std::size_t f = first; f < std::min(files.size(), first + batch); ++f)
+        {
+            const Package& package = linker.load(files[f]);
+            for (std::size_t i = 0; i < package.exports().size(); ++i)
+            {
+                const ObjectRef ref{&package, ObjectIndex::from_export(i)};
+                if (ref.export_entry().serial_size <= 0 ||
+                    (ref.export_entry().object_flags & ObjectFlag::ClassDefaultObject) != 0)
+                {
+                    continue;
+                }
+                const std::string cls = package.class_name(ref.index);
+                if (cls.find("Vehicle") == std::string::npos && cls != "SkelControlWheel" &&
+                    cls != "TdActorFactoryHelicopter" && cls != "SeqAct_TdHelicopterFactory")
+                {
+                    continue;
+                }
+                if (!vehicle_object_kind(linker, ref)) continue;
+                try
+                {
+                    const VehicleObject vehicle = read_vehicle_object(linker, ref, schema);
+                    ++classes[cls];
+                    seats += vehicle.seats.size();
+                    for (const VehicleLink& link : vehicle.links)
+                    {
+                        ++links;
+                        if (link.resolution.status == ResolveStatus::Invalid && failures++ < 10)
+                        {
+                            ADD_FAILURE() << linker.qualified_path(ref) << ": invalid " << link.property;
+                        }
+                    }
+                }
+                catch (const Error& e)
+                {
+                    if (failures++ < 10) ADD_FAILURE() << linker.qualified_path(ref) << ": " << e.what();
+                }
+            }
+        }
+    }
+    print_map("vehicle exports", classes);
+    std::cout << "  serialized seats: " << seats << ", links: " << links << '\n';
+    EXPECT_FALSE(classes.empty());
+    EXPECT_GT(links, 0u);
+    EXPECT_EQ(failures, 0u);
 }
 
 TEST(MirrorsEdgeAssetTests, FullCorpusBrushes)
