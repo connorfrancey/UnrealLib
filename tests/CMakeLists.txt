@@ -56,6 +56,7 @@ add_executable(UnrealLibTests
         Integration/MirrorsEdgePropertyTests.cpp
         Integration/MirrorsEdgeReflectionTests.cpp
         Integration/MirrorsEdgeDecompilerTests.cpp
+        Integration/MirrorsEdgeCompilerTests.cpp
         Integration/MirrorsEdgeAssetTests.cpp
         Integration/MirrorsEdgeWriterTests.cpp
         Integration/MirrorsEdgeT3DTests.cpp

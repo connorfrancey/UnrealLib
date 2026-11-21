@@ -4,6 +4,7 @@
 /// @brief UnrealScript reflection objects (UField and subclasses): classes, states, functions, structs, enums,
 ///        constants, properties and text buffers.
 
+#include <span>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -311,4 +312,23 @@ namespace UnrealLib
     /// @param options       Name table, cooking state, schema and diagnostics.
     [[nodiscard]] FieldObject read_field(BinaryReader& reader, FieldKind kind, PropertyType property_type,
                                          const ObjectHeaderInput& input, const FieldReadOptions& options);
+
+    /// @brief Inputs of write_field().
+    struct FieldWriteOptions
+    {
+        FName none;                             ///< The package's "None" (property list terminators).
+        bool console_cooked = false;            ///< As FieldReadOptions::console_cooked.
+    };
+
+    /// @brief Writes @p field as read_field() reads it: the inverse, for building reflection exports (classes,
+    ///        functions, properties, states, structs) of a package.
+    ///
+    /// @p script is the bytecode of a struct (as stored: storage form); its sizes are written from it and from
+    /// `field.structure->script_size` (the in-memory size). Fields read_field() reads and drops (versions before 160,
+    /// a pre-UE3 class GUID) are written as zero. A read and written field gives the original bytes back for the
+    /// versions where nothing is dropped (every Mirror's Edge reflection export: MirrorsEdgeReflectionTests).
+    /// @throws UnsupportedError for layouts it doesn't write (versions before 178, Dishonored's class layout, the
+    ///         native class name of version >= 813).
+    void write_field(BinaryWriter& writer, const FieldObject& field, std::span<const std::byte> script,
+                     const ObjectHeaderInput& input, const FieldWriteOptions& options);
 }

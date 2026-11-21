@@ -39,6 +39,10 @@ namespace UnrealLib::Assets
         std::vector<Vec3> positions;     ///< Vertex positions.
         std::vector<Vec3> tangents;      ///< Tangent X per vertex (unpacked).
         std::vector<Vec3> normals;       ///< Tangent Z (normal) per vertex (unpacked).
+        /// Tangent X and Z as stored (FPackedNormal: x, y, z and a fourth byte the unpacked vectors drop; Z's holds the
+        /// binormal's sign). write_static_mesh() writes these when there is one per vertex, else packs the vectors.
+        std::vector<std::uint32_t> packed_tangents;
+        std::vector<std::uint32_t> packed_normals;
         std::vector<Color> colors;       ///< Per-vertex color (UV stream color in versions 434..614; from 615 on
                                          ///< a separate color stream, empty when the mesh has none).
         std::int32_t num_uv_sets = 0;    ///< Texture coordinate sets.
@@ -49,8 +53,27 @@ namespace UnrealLib::Assets
         std::vector<std::uint16_t> indices;  ///< Triangle list.
         std::vector<std::uint16_t> wireframe_indices; ///< Line list.
         std::vector<std::uint16_t> adjacency_indices; ///< Adjacency index buffer (12 per triangle; late UE3).
-        std::int32_t num_edges = 0;      ///< Edges (version < 686; kept as a count).
+        std::int32_t num_edges = 0;      ///< Edges (version < 686).
+        std::vector<std::byte> edges;    ///< The edges as stored, 16 bytes each (two vertex and two face indices).
         std::vector<std::uint8_t> shadow_triangle_double_sided; ///< ShadowTriangleDoubleSided (version < 686).
+    };
+
+    /// @brief A collision triangle of the kDOP tree: three vertex indices into LOD 0 and the section it belongs to.
+    struct KDopTriangle
+    {
+        std::array<std::uint16_t, 3> vertices{};
+        std::uint16_t material_index = 0;
+    };
+
+    /// @brief A node of the kDOP collision tree as stored before file version 868 (32 bytes): the box, then a 4-byte
+    ///        bIsLeaf, then two 16-bit values (a leaf: its triangle count and first triangle; else its two children).
+    struct KDopNode
+    {
+        Vec3 min;                ///< Box minimum.
+        Vec3 max;                ///< Box maximum.
+        bool leaf = false;       ///< bIsLeaf.
+        std::uint16_t first = 0; ///< Leaf: NumTriangles; else LeftNode.
+        std::uint16_t second = 0; ///< Leaf: StartIndex; else RightNode.
     };
 
     /// @brief A StaticMesh export.
@@ -74,6 +97,8 @@ namespace UnrealLib::Assets
         ObjectIndex body_setup;             ///< RB_BodySetup (collision), may be null.
         std::int32_t kdop_node_count = 0;   ///< Collision tree nodes.
         std::int32_t kdop_triangle_count = 0; ///< Collision triangles.
+        std::vector<std::byte> kdop_nodes;  ///< The tree's nodes as stored (32 bytes each before file version 868).
+        std::vector<KDopTriangle> kdop_triangles; ///< The tree's triangles, in leaf order.
         std::int32_t internal_version = 0;  ///< InternalVersion.
         std::vector<std::string> content_tags; ///< Name array after InternalVersion (InternalVersion >= 17, < 593).
         std::vector<StaticMeshLod> lods;    ///< Render LODs.
@@ -96,6 +121,25 @@ namespace UnrealLib::Assets
 
     /// @brief Reads a StaticMesh export. The native data must be consumed exactly.
     [[nodiscard]] StaticMesh read_static_mesh(Linker& linker, ObjectRef object, const PropertySchema* schema = nullptr);
+
+    /// @brief Serializes the native data of a StaticMesh export (everything after the tagged properties), the inverse
+    ///        of read_static_mesh(): writing an unmodified mesh reproduces its native bytes exactly.
+    /// @param mesh        The mesh.
+    /// @param context     Version information (the package's file version).
+    /// @param base_offset Package offset at which the native data will be written (inline bulk data records store
+    ///                    absolute offsets).
+    /// @throws UnsupportedError for file versions outside 472..614 (Mirror's Edge is 536);
+    ///         SerializationError if a stream's length doesn't match the vertex count.
+    [[nodiscard]] std::vector<std::byte> write_static_mesh(const StaticMesh& mesh, const SerializationContext& context,
+                                                           std::uint64_t base_offset);
+
+    /// @brief The nodes of @p mesh's kDOP tree (early layout: 32 bytes a node). @throws SerializationError otherwise.
+    [[nodiscard]] std::vector<KDopNode> decode_kdop_nodes(const StaticMesh& mesh);
+
+    /// @brief Builds @p mesh's collision tree (kdop_nodes and kdop_triangles) from LOD 0's sections with collision
+    ///        enabled, the way UE3's kDOP builder does: a node splits its triangles at the mean of their centroids on
+    ///        the axis where they spread most, until a node has 5 or fewer (a leaf). @throws Error if there is no LOD.
+    void build_kdop(StaticMesh& mesh);
 
     /// @brief Formats LOD @p lod of @p mesh as Wavefront OBJ: positions, normals, the first UV set, one group per
     ///        section (`usemtl` = material object name).

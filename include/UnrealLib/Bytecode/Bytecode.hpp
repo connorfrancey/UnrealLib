@@ -19,6 +19,7 @@
 namespace UnrealLib
 {
     class BinaryReader;
+    class BinaryWriter;
     struct GameProfile;
 
     /// @brief Kind of a bytecode token. Names follow upstream UELib token classes (without "Token").
@@ -139,6 +140,7 @@ namespace UnrealLib
     {
         FName name;              ///< Label name.
         std::int32_t offset = 0; ///< Code offset.
+        std::int32_t target = -1; ///< assemble_script(): the token the label marks, by index (-1: `offset` is original)
     };
 
     /// @brief One decoded token. Operands that a kind does not use keep their defaults.
@@ -150,10 +152,11 @@ namespace UnrealLib
         std::uint32_t offset = 0;          ///< Storage offset within the script.
         std::uint32_t size = 0;            ///< Storage size including children.
         std::uint32_t memory_offset = 0;   ///< In-memory offset (the unit of jump targets and ScriptSize).
+        std::uint32_t memory_size = 0;     ///< In-memory size with operands and terminators (0: not decoded, a new token).
         ObjectIndex object;                ///< First object operand.
         ObjectIndex object2;               ///< Second object operand (StructMember's struct, Context's property).
-        FName name;                        ///< Name operand.
-        std::int32_t int_value = 0;        ///< IntConst; DebugInfo line.
+        FName name;                        ///< Name operand; LabelTable: its "None" terminator.
+        std::int32_t int_value = 0;        ///< IntConst; DebugInfo line; LabelTable: its "None" terminator's offset.
         std::array<std::int32_t, 3> ints{}; ///< RotationConst; DebugInfo (version, line, text pos).
         std::array<float, 3> floats{};     ///< FloatConst (floats[0]); VectorConst.
         std::string string_value;          ///< StringConst / UnicodeStringConst (UTF-8).
@@ -163,6 +166,16 @@ namespace UnrealLib
         std::uint8_t byte_value2 = 0;      ///< StructMember IsModification.
         std::vector<LabelEntry> labels;    ///< LabelTable entries (without the terminating "None").
         std::vector<std::uint32_t> children; ///< Indices of operand tokens in Script::tokens, in stream order.
+        /// assemble_script(): the token a jump-like token (Jump, JumpIfNot, Case, Iterator, ...) goes to, by index;
+        /// end_of_script for the end; -1: `word` is an original memory offset (decoded tokens).
+        std::int32_t target = -1;
+        static constexpr std::int32_t end_of_script = -2;
+        /// assemble_script(), Context/ClassContext built from scratch: the skip reaches this token (by index) instead of
+        /// covering the member (a context around an iterator call skips the whole loop when the object is none). -1: none.
+        std::int32_t skip_to = -1;
+        /// assemble_script(), Context/ClassContext built from scratch: this exact skip instead of a computed one (the
+        /// UE3 compiler stores 5, the size of the `Outer` variable, for every context on `Outer`). -1: computed.
+        std::int32_t skip_size = -1;
     };
 
     /// @brief A decoded script.
@@ -191,4 +204,28 @@ namespace UnrealLib
     /// @throws SerializationError on bad opcodes, malformed operands, or when the token stream does not end exactly
     ///         at @p memory_size.
     [[nodiscard]] Script decode_script(BinaryReader& reader, std::size_t memory_size, const BytecodeOptions& options);
+
+    /// @brief Writes @p script back as bytecode (the inverse of decode_script()), in @p writer's file version.
+    ///
+    /// Operands are written as they are, jump targets and skip sizes included: a script decoded and encoded unchanged
+    /// comes out byte-identical. Terminators the decoder consumes without keeping as children (EndFunctionParms,
+    /// EndParmValue, the LabelTable's "None" entry) are written from the token kinds; a DebugInfo after a call's
+    /// operands is its last child. Opcodes come from Token::opcode when @p token_map agrees with Token::kind, else
+    /// from the map (so a new token only needs its kind).
+    /// @return The in-memory size of what was written (the ScriptSize unit).
+    /// @throws Error (InvalidArgument) for a token missing operands, a kind the map has no opcode for, or text that
+    ///         doesn't fit the string constant's encoding.
+    std::size_t encode_script(BinaryWriter& writer, const Script& script, const TokenMap& token_map);
+
+    /// @brief Like encode_script(), after laying the script out again: for a token tree that was edited (tokens added,
+    ///        removed or changed size).
+    ///
+    /// Jump targets (Jump, JumpIfNot, Case, Iterator, DynamicArrayIterator, FilterEditorOnly, labels) follow the token
+    /// they pointed at: an original memory offset (`word`) of a decoded token, or Token::target. Relative sizes
+    /// (Context and Skip skips, Conditional branches, DefaultParameter sizes, array intrinsics' skips) are recomputed:
+    /// a decoded token keeps its original difference from the span it covers (the compiler's own values differ from
+    /// the plain size in places), a new one gets the size. Unchanged scripts come out byte-identical.
+    /// @return The in-memory size of what was written.
+    /// @throws Error (InvalidArgument) as encode_script(), and for a jump to where no token is, or a size over 16 bits.
+    std::size_t assemble_script(BinaryWriter& writer, const Script& script, const TokenMap& token_map);
 }

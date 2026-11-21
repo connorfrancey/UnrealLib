@@ -303,9 +303,22 @@ namespace UnrealLib::Decompiler
         }
         out.structure = structure(script, options);
         Printer printer(*this, script, owner, out);
-        for (const std::uint32_t parameter : out.structure.default_parameters)
+        // The prologue: one statement per optional parameter, its DefaultParameter or Nothing (no default value)
+        for (const std::uint32_t statement : script.statements)
         {
-            out.default_values.push_back(printer.text(parameter));
+            const TokenKind kind = script.tokens[statement].kind;
+            if (kind == TokenKind::DefaultParameter)
+            {
+                out.default_values.push_back(printer.text(statement));
+            }
+            else if (kind == TokenKind::Nothing)
+            {
+                out.default_values.emplace_back();
+            }
+            else
+            {
+                break;
+            }
         }
         printer.print(out.structure.statements, depth, out.source);
         return out;

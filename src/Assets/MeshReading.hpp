@@ -10,6 +10,7 @@
 #include <UnrealLib/Assets/MeshTypes.hpp>
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
+#include <UnrealLib/Serialization/BinaryWriter.hpp>
 
 namespace UnrealLib::Assets::detail
 {
@@ -80,4 +81,13 @@ namespace UnrealLib::Assets::detail
 
     /// IEEE half to float.
     float half_to_float(std::uint16_t h) noexcept;
+
+    // Writing helpers, shared by the mesh writers (defined in StaticMesh.cpp).
+
+    /// A unit vector as FPackedNormal (the fourth byte 128).
+    std::uint32_t pack_normal(const Vec3& v) noexcept;
+    /// Round to nearest even; the inverse of half_to_float() for every finite half and the infinities.
+    std::uint16_t float_to_half(float f) noexcept;
+    void write_vec3(BinaryWriter& w, const Vec3& v);
+    void write_bulk_array_header(BinaryWriter& w, std::uint32_t element_size, std::size_t count);
 }

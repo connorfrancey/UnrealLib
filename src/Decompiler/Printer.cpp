@@ -458,8 +458,10 @@ namespace UnrealLib::Decompiler
 
         // Calls
         case TokenKind::VirtualFunction:
-        case TokenKind::DelegateFunction:
             return call(name_text(t.name), ops());
+        case TokenKind::DelegateFunction:
+            // A delegate held in a local or parameter is called through it: the source names the variable
+            return call(t.byte_value != 0 && !t.object.is_null() ? object_name(t.object) : name_text(t.name), ops());
         case TokenKind::GlobalFunction:
             return call("global." + name_text(t.name), ops());
         case TokenKind::FinalFunction:
