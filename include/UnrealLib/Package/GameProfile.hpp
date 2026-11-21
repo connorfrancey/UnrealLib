@@ -60,6 +60,10 @@ namespace UnrealLib
         bool skeletal_gpu_uv_count = false;
         /// Skeletal LOD models end after the GPU vertex buffer (no ExtraVertexInfluences although version >= 534).
         bool skeletal_lod_ends_after_gpu_skin = false;
+        /// LightMapTexture2D ends with one uint32 after the base texture data.
+        bool lightmap_texture_trailing_word = false;
+        /// Font exports serialize kerning pairs and resolution offsets after character remapping.
+        bool font_kerning_tables = false;
     };
 
     /// @brief Describes one game build and the facts used to recognise its packages.

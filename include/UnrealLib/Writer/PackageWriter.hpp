@@ -40,9 +40,11 @@ namespace UnrealLib
         std::vector<ExportEntry> exports;        ///< Export table; serial size/offset are recomputed.
         std::vector<std::vector<ObjectIndex>> depends; ///< One list per export (file version >= 415).
         std::vector<std::vector<std::byte>> export_data; ///< One payload per export.
-        /// Bytes between the depends table and the first export's data, kept verbatim (empty for Mirror's Edge;
-        /// thumbnail/GUID tables of later versions would live here and are not re-laid out).
+        /// Bytes between the depends table and the first export's data. Known UE3 offsets into this region
+        /// are relocated when the writer moves it.
         std::vector<std::byte> header_tail;
+        /// Original absolute position of header_tail. Required when the summary points to tables in it.
+        std::size_t header_tail_offset = 0;
 
         /// @brief Copies a loaded package. Compressed packages yield their decompressed contents.
         /// @throws Error (InvalidArgument) if the package's depends table was not loaded (LoadOptions::read_depends).

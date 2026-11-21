@@ -60,6 +60,50 @@ CPMAddPackage(
             "ZLIB_INSTALL ${UNREALLIB_INSTALL}"
 )
 
+# Fetch private header-only dependencies without running their upstream build or install rules.
+CPMAddPackage(
+        NAME magic_enum
+        GITHUB_REPOSITORY Neargye/magic_enum
+        GIT_TAG ${MAGICENUM_TAG}
+        DOWNLOAD_ONLY YES
+)
+
+# fast_float: Fast and exact implementation of the C++ from_chars functions for number types: 4x to 10x faster than strtod, part of GCC 12, MySQL, DuckDB, Chromium, Redis and WebKit/Safari
+CPMAddPackage(
+        NAME fast_float
+        GITHUB_REPOSITORY fastfloat/fast_float
+        GIT_TAG ${FASTFLOAT_TAG}
+        DOWNLOAD_ONLY YES
+)
+
+# unordered_dense
+CPMAddPackage(
+        NAME unordered_dense
+        GITHUB_REPOSITORY martinus/unordered_dense
+        GIT_TAG ${UNORDEREDDENSE_TAG}
+        DOWNLOAD_ONLY YES
+)
+
+if (WIN32)
+    CPMAddPackage(
+            NAME mio
+            GITHUB_REPOSITORY vimpunk/mio
+            GIT_TAG ${MIO_TAG}
+            DOWNLOAD_ONLY YES
+    )
+endif ()
+
+function(unreallib_use_private_headers consumer package upstream_target)
+    if (${package}_SOURCE_DIR)
+        target_include_directories(${consumer} SYSTEM PRIVATE "${${package}_SOURCE_DIR}/include")
+    elseif (TARGET ${upstream_target})
+        target_include_directories(${consumer} SYSTEM PRIVATE
+                "$<TARGET_PROPERTY:${upstream_target},INTERFACE_INCLUDE_DIRECTORIES>")
+    else ()
+        message(FATAL_ERROR "UnrealLib: no source directory or header target for ${package}")
+    endif ()
+endfunction()
+
 # zlib >= 1.4 exports ZLIB::ZLIBSTATIC for the static build; older/system zlib exports ZLIB::ZLIB.
 if (TARGET ZLIB::ZLIBSTATIC)
     set(UNREALLIB_ZLIB_TARGET ZLIB::ZLIBSTATIC)
@@ -87,6 +131,18 @@ if (UNREALLIB_BUILD_TOOLS OR UNREALLIB_BUILD_TESTS)
 endif ()
 
 if (UNREALLIB_BUILD_TOOLS)
+    CPMAddPackage(
+            NAME expected
+            GITHUB_REPOSITORY TartanLlama/expected
+            GIT_TAG ${TL_EXPECTED_TAG}
+            DOWNLOAD_ONLY YES
+    )
+    CPMAddPackage(
+            NAME RapidJSON
+            GITHUB_REPOSITORY Tencent/rapidjson
+            GIT_TAG ${RAPIDJSON_TAG}
+            DOWNLOAD_ONLY YES
+    )
     CPMAddPackage(
             NAME CLI11
             EXCLUDE_FROM_ALL YES

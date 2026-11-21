@@ -6,10 +6,14 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <CLI/CLI.hpp>
 #include <fmt/format.h>
+#include <rapidjson/prettywriter.h>
+#include <rapidjson/stringbuffer.h>
+#include <tl/expected.hpp>
 
 #include <UnrealLib/UnrealLib.hpp>
 
@@ -55,6 +59,55 @@ namespace
         }
         return files;
     }
+
+    struct Validation
+    {
+        std::string profile;
+        UnrealLib::Diagnostics diagnostics;
+    };
+
+    tl::expected<Validation, std::string> validate(const fs::path& file, const UnrealLib::LoadOptions& options)
+    {
+        try
+        {
+            const auto package = UnrealLib::Package::open(file, options);
+            Validation result{package.profile().id, package.diagnostics()};
+            result.diagnostics.append(UnrealLib::validate_package(package));
+            return result;
+        }
+        catch (const UnrealLib::Error& error)
+        {
+            return tl::make_unexpected(std::string(error.what()));
+        }
+    }
+
+    using JsonWriter = rapidjson::PrettyWriter<rapidjson::StringBuffer>;
+
+    void write_string(JsonWriter& writer, const char* key, std::string_view value)
+    {
+        writer.Key(key);
+        writer.String(value.data(), static_cast<rapidjson::SizeType>(value.size()));
+    }
+
+    void write_diagnostics(JsonWriter& writer, const UnrealLib::Diagnostics& diagnostics)
+    {
+        writer.Key("diagnostics");
+        writer.StartArray();
+        for (const auto& diagnostic : diagnostics.entries())
+        {
+            writer.StartObject();
+            write_string(writer, "severity", to_string(diagnostic.severity));
+            write_string(writer, "code", diagnostic.code);
+            write_string(writer, "message", diagnostic.message);
+            if (diagnostic.offset)
+            {
+                writer.Key("offset");
+                writer.Uint64(*diagnostic.offset);
+            }
+            writer.EndObject();
+        }
+        writer.EndArray();
+    }
 }
 
 int main(int argc, char** argv)
@@ -95,31 +148,43 @@ int main(int argc, char** argv)
     int valid = 0;
     int invalid = 0;
     int failed = 0;
-    nlohmann::ordered_json report = nlohmann::ordered_json::array();
+    rapidjson::StringBuffer report;
+    JsonWriter writer(report);
+    if (json)
+    {
+        writer.SetIndent(' ', 2);
+        writer.StartObject();
+        writer.Key("packages");
+        writer.StartArray();
+    }
 
     for (const auto& file : files)
     {
-        const std::string display = file.string();
-        nlohmann::ordered_json entry;
-        entry["file"] = display;
-        try
+        const auto utf8 = file.u8string();
+        const std::string_view display(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+        if (json)
         {
-            const auto package = UnrealLib::Package::open(file, options);
-            UnrealLib::Diagnostics diagnostics = package.diagnostics();
-            diagnostics.append(UnrealLib::validate_package(package));
+            writer.StartObject();
+            write_string(writer, "file", display);
+        }
 
+        if (const auto result = validate(file, options))
+        {
+            const auto& [profile_id, diagnostics] = *result;
             const bool ok = !diagnostics.has_errors() &&
                             !(strict && diagnostics.count(UnrealLib::Severity::Warning) > 0);
             ok ? ++valid : ++invalid;
-            entry["status"] = ok ? "valid" : "invalid";
-            entry["profile"] = package.profile().id;
-            entry["diagnostics"] = UnrealLib::Tools::diagnostics_to_json(diagnostics);
-
-            if (!json && (!quiet || !ok))
+            if (json)
+            {
+                write_string(writer, "status", ok ? "valid" : "invalid");
+                write_string(writer, "profile", profile_id);
+                write_diagnostics(writer, diagnostics);
+            }
+            else if (!quiet || !ok)
             {
                 fmt::print("{}: {} ({} errors, {} warnings, profile {})\n", display, ok ? "OK" : "INVALID",
                            diagnostics.count(UnrealLib::Severity::Error),
-                           diagnostics.count(UnrealLib::Severity::Warning), package.profile().id);
+                           diagnostics.count(UnrealLib::Severity::Warning), profile_id);
                 for (const auto& d : diagnostics.entries())
                 {
                     if (d.severity != UnrealLib::Severity::Info || !quiet)
@@ -129,25 +194,36 @@ int main(int argc, char** argv)
                 }
             }
         }
-        catch (const UnrealLib::Error& e)
+        else
         {
             ++failed;
-            entry["status"] = "load-failed";
-            entry["error"] = e.what();
-            if (!json)
+            if (json)
             {
-                fmt::print("{}: LOAD FAILED: {}\n", display, e.what());
+                write_string(writer, "status", "load-failed");
+                write_string(writer, "error", result.error());
+            }
+            else
+            {
+                fmt::print("{}: LOAD FAILED: {}\n", display, result.error());
             }
         }
-        report.push_back(std::move(entry));
+        if (json) writer.EndObject();
     }
 
     if (json)
     {
-        nlohmann::ordered_json out;
-        out["packages"] = std::move(report);
-        out["totals"] = {{"valid", valid}, {"invalid", invalid}, {"load_failed", failed}};
-        std::cout << out.dump(2) << '\n';
+        writer.EndArray();
+        writer.Key("totals");
+        writer.StartObject();
+        writer.Key("valid");
+        writer.Int(valid);
+        writer.Key("invalid");
+        writer.Int(invalid);
+        writer.Key("load_failed");
+        writer.Int(failed);
+        writer.EndObject();
+        writer.EndObject();
+        std::cout << report.GetString() << '\n';
     }
     else
     {

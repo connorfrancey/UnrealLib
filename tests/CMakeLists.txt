@@ -98,6 +98,7 @@ if (UNREALLIB_BUILD_DIFFERENTIAL)
     set(_dump_artifacts "${CMAKE_CURRENT_BINARY_DIR}/uelib-dump")
     set(_dump_exe "${_dump_artifacts}/bin/UELibDump/release/UELibDump${CMAKE_EXECUTABLE_SUFFIX}")
     set(_dump_out "${CMAKE_CURRENT_BINARY_DIR}/uelib-dump-output")
+    set(_bench_out "${CMAKE_CURRENT_BINARY_DIR}/uelib-bench.json")
 
     add_custom_command(
             OUTPUT "${_dump_exe}"
@@ -119,6 +120,7 @@ if (UNREALLIB_BUILD_DIFFERENTIAL)
             GTest::gtest_main)
     target_compile_definitions(UnrealLibDifferentialTests PRIVATE
             "UNREALLIB_DEFAULT_UELIB_DUMP_DIR=\"${_dump_out}\""
+            "UNREALLIB_DEFAULT_UELIB_BENCH_FILE=\"${_bench_out}\""
             "UNREALLIB_DEFAULT_MIRRORSEDGE_DIR=\"${UNREALLIB_MIRRORSEDGE_DIR}\"")
     unreallib_set_compiler_options(UnrealLibDifferentialTests)
     add_dependencies(UnrealLibDifferentialTests unreallib_uelib_dump)
@@ -134,10 +136,19 @@ if (UNREALLIB_BUILD_DIFFERENTIAL)
         set_tests_properties(Differential.UELibDump.Run PROPERTIES
                 FIXTURES_SETUP uelib_dump
                 FIXTURES_REQUIRED uelib_dump_clean)
+        # Upstream timings for DifferentialSpeed.SpeedComparison (top-level packages only; a few seconds). It runs
+        # after the dump so the two do not compete for the CPU.
+        add_test(NAME Differential.UELibBench.Run
+                 COMMAND "${_dump_exe}" --bench "${_bench_out}" "${UNREALLIB_MIRRORSEDGE_DIR}")
+        set_tests_properties(Differential.UELibBench.Run PROPERTIES
+                FIXTURES_SETUP uelib_dump
+                FIXTURES_REQUIRED uelib_dump_clean
+                DEPENDS Differential.UELibDump.Run
+                RUN_SERIAL TRUE)
         gtest_discover_tests(UnrealLibDifferentialTests
                 DISCOVERY_MODE PRE_TEST
                 TEST_PREFIX "Differential."
-                PROPERTIES FIXTURES_REQUIRED uelib_dump)
+                PROPERTIES FIXTURES_REQUIRED uelib_dump RUN_SERIAL TRUE)   # serial: SpeedComparison times itself
     else ()
         message(STATUS "UnrealLib: differential tests need UNREALLIB_MIRRORSEDGE_DIR; they will be skipped")
         gtest_discover_tests(UnrealLibDifferentialTests DISCOVERY_MODE PRE_TEST TEST_PREFIX "Differential.")

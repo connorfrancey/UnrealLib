@@ -10,23 +10,30 @@ consumed **exactly**: a reader that stops early or runs past the export is an er
 |-------|--------|--------|----------------------------|
 | Texture2D, LightMapTexture2D, ShadowMapTexture2D, TerrainWeightMapTexture, TextureFlipBook | `read_texture2d` | PNG, TGA, DDS (all mips, lossless) | 58,960 textures parse; 57,835 decode at their **largest** mip (34,806 of those from mips streamed in other packages), 0 failures |
 | TextureCube | `read_texture_cube` | (faces are Texture2D) | 1,143 parse |
+| TextureMovie | `read_texture_movie` | Encoded movie bytes via `load_bulk_data` for inline payloads | 37 exports parse and all available inline payloads load |
+| Texture3D | `read_texture3d` | Native dimensions, pixel-format ordinal, and volume mip bulk data | Synthetic coverage, with no exports in the corpus |
 | SoundNodeWave | `read_sound_wave` | stored file (Ogg Vorbis) | 78,049 parse; 78,048 extract (1 has no data), all Ogg; sample of 320 checked as valid Vorbis streams |
+| Font, MultiFont | `read_font` | Glyph data, character remapping, the pre-511 MultiFont resolution table, and Mirror's Edge kerning tables | All 85 Font and 270 MultiFont exports parse. Kerning resolution offsets are ordered and within the pair table |
 | StaticMesh | `read_static_mesh` | Wavefront OBJ | 19,007 parse; 35.1M vertices, 12.5M triangles; all indices in range; every LOD 0 vertex inside the stored bounds |
 | SkeletalMesh | `read_skeletal_mesh` | ActorX PSK | 742 parse; 19,540 bones, 1.8M vertices; every vertex's weights sum to 255; all bone/index references in range |
 | AnimSequence | `read_anim_sequence` | ActorX PSA (per AnimSet) | 6,938 decode; decoded tracks cover each compressed byte stream exactly; all rotations unit length |
 | AnimSet, TdAnimSet | `read_anim_set` | — | 679 parse; for all 560 populated sets each sequence has one track per bone |
 | Polys | `read_polys`, `write_polys` | T3D `Begin PolyList` (via T3D export/import) | 9,392 parse exactly (65,005 polygons) and `write_polys` reproduces every one byte for byte; every polygon has ≥ 3 vertices and a unit normal; ElementOwner is the Polys itself or its outer Model |
 | Model | `read_model` (up to the Polys reference) | — | 9,392 parse (41,850 BSP surfaces, zones included); every surface indexes the decoded points/vectors; the Polys reference is a Polys |
+| ModelComponent | `read_model_component` | Model reference and zone index (file version 536) | All 2,572 components reference a Model |
 | Material, MaterialInstanceConstant, MaterialInstanceTimeVarying | `read_material` | JSON metadata | 29,392 read with a ReflectionSchema; every parameter array decodes (21,821 parameters, 84,137 texture references, 391,680 expressions) |
 
 The checks run in `MirrorsEdgeAssetTests.FullCorpusAssets`, `.FullCorpusMaterials` and `.FullCorpusBrushes` (`UNREALLIB_FIXTURE_SWEEP=1`,
 about two minutes in Release). `UNREALLIB_ASSET_DUMP=<dir>` writes a sample of decoded textures, meshes and skeletal
 meshes for manual review (game-derived output: never commit it).
+`UNREALLIB_ASSET_CLASS` limits `FullCorpusAssets` to one asset class when verifying a specific reader.
 
 ## Sources
 
-* Texture, bulk data and sound layouts: upstream UELib (`UTexture`, `UTexture2D`, `UBulkData`, `USoundNodeWave`,
+* Texture, bulk data and sound layouts: upstream UELib (`UTexture`, `UTexture2D`, `UTextureMovie`, `UTexture3D`, `UBulkData`, `USoundNodeWave`,
   version gates from `PackageObjectLegacyVersion`).
+* Font and MultiFont layouts follow upstream UELib. Mirror's Edge fixtures establish two extra native tables
+  for kerning pairs and resolution offsets. From version 511, the font's glyphs and textures are tagged properties.
 * Static/skeletal mesh and animation layouts and the Mirror's Edge deviations: UE Viewer (umodel) by Konstantin Nosov,
   MIT license — `UnMesh3.cpp` (`#if MEDGE` branches), `UnAnim3.cpp`, `UnMeshTypes.h`, `ExportPsk.cpp` (PSK/PSA
   conventions). UnrealLib's code is an independent implementation; upstream UELib has no UE3 mesh or animation code.

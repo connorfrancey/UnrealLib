@@ -36,6 +36,9 @@ unreallib_add_module(Serialization
             UnrealLib::Utilities
         PRIVATE_DEPS
             ${UNREALLIB_ZLIB_TARGET})
+if (WIN32)
+    unreallib_use_private_headers(unreallib_serialization mio mio::mio)
+endif ()
 
 unreallib_add_module(Names
         SOURCES
@@ -55,6 +58,7 @@ unreallib_add_module(Package
         PUBLIC_DEPS
             UnrealLib::Names
             UnrealLib::Serialization)
+unreallib_use_private_headers(unreallib_package magic_enum magic_enum::magic_enum)
 
 unreallib_add_module(Objects
         SOURCES
@@ -69,6 +73,7 @@ unreallib_add_module(Properties
             Properties/PropertyValue.cpp
         PUBLIC_DEPS
             UnrealLib::Package)
+unreallib_use_private_headers(unreallib_properties fast_float FastFloat::fast_float)
 
 unreallib_add_module(Bytecode
         SOURCES
@@ -93,6 +98,7 @@ unreallib_add_module(Linker
             UnrealLib::Package
             UnrealLib::Properties
             UnrealLib::Reflection)
+unreallib_use_private_headers(unreallib_linker unordered_dense unordered_dense::unordered_dense)
 
 unreallib_add_module(Decompiler
         SOURCES
@@ -113,6 +119,7 @@ unreallib_add_module(Assets
             Assets/AssetObject.cpp
             Assets/Brush.cpp
             Assets/BulkData.cpp
+            Assets/Font.cpp
             Assets/Image.cpp
             Assets/Material.cpp
             Assets/MeshReading.hpp

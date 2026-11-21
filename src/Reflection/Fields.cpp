@@ -46,6 +46,7 @@ namespace UnrealLib
             {FieldKind::Struct, "Struct"},       {FieldKind::Enum, "Enum"},
             {FieldKind::Const, "Const"},         {FieldKind::Property, "Property"},
             {FieldKind::TextBuffer, "TextBuffer"},
+            {FieldKind::MetaData, "MetaData"},
         };
 
         std::vector<FName> read_name_list(BinaryReader& reader)
@@ -71,6 +72,35 @@ namespace UnrealLib
                 map.emplace_back(key, ObjectIndex{reader.read_index()});
             }
             return map;
+        }
+
+        std::vector<FieldMetadata> read_metadata(BinaryReader& reader)
+        {
+            const bool has_field_path = reader.context().file_version <= 540;
+            const auto field_count = reader.read_array_count(8);
+            std::vector<FieldMetadata> fields;
+            fields.reserve(field_count);
+            for (std::uint32_t i = 0; i < field_count; ++i)
+            {
+                FieldMetadata entry;
+                if (has_field_path)
+                {
+                    entry.field = reader.read_fstring();
+                }
+                else
+                {
+                    entry.field = ObjectIndex{reader.read_index()};
+                }
+                const auto tag_count = reader.read_array_count(12);
+                entry.tags.reserve(tag_count);
+                for (std::uint32_t j = 0; j < tag_count; ++j)
+                {
+                    const auto name = read_fname(reader);
+                    entry.tags.emplace_back(name, reader.read_fstring());
+                }
+                fields.push_back(std::move(entry));
+            }
+            return fields;
         }
 
         void read_struct(BinaryReader& reader, FieldObject& out, const FieldReadOptions& options)
@@ -392,6 +422,13 @@ namespace UnrealLib
             return out;
         }
 
+        if (kind == FieldKind::MetaData)
+        {
+            out.metadata = read_metadata(reader);
+            out.end_offset = reader.position();
+            return out;
+        }
+
         // UField
         if (v < vSuperReferenceMovedToUStruct)
         {
@@ -469,6 +506,7 @@ namespace UnrealLib
             break;
         }
         case FieldKind::TextBuffer: break;
+        case FieldKind::MetaData: break;
         }
         out.end_offset = reader.position();
         return out;

@@ -101,6 +101,14 @@ namespace UnrealLib::Assets
         std::size_t unparsed_offset = 0;  ///< Offset in the export data where decoding stopped.
     };
 
+    /// @brief The serialized Model and ZoneIndex fields at the start of a UModelComponent.
+    struct ModelComponent
+    {
+        ObjectIndex model;             ///< BSP model referenced by this component.
+        std::int32_t zone_index = 0;   ///< ZoneIndex as stored, including any sentinel.
+        std::size_t unparsed_offset = 0; ///< Export-relative offset immediately after ZoneIndex.
+    };
+
     /// @brief Reads a Polys export.
     /// @param linker Resolves the class hierarchy.
     /// @param object The Polys export.
@@ -125,4 +133,10 @@ namespace UnrealLib::Assets
     /// @throws Error (InvalidArgument) if @p object is not a Model; UnsupportedError for file versions other than 536;
     ///         SerializationError on bad data.
     [[nodiscard]] Model read_model(Linker& linker, ObjectRef object, const PropertySchema* schema = nullptr);
+
+    /// @brief Reads the Model and ZoneIndex fields of a Mirror's Edge ModelComponent export (version 536).
+    /// @throws Error (InvalidArgument) for other object classes, UnsupportedError for other file versions,
+    ///         or SerializationError if the native prefix is truncated.
+    [[nodiscard]] ModelComponent read_model_component(Linker& linker, ObjectRef object,
+                                                       const PropertySchema* schema = nullptr);
 }

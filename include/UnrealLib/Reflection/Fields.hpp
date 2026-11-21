@@ -9,6 +9,7 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <UnrealLib/Names/FName.hpp>
@@ -34,6 +35,7 @@ namespace UnrealLib
         Const,        ///< UConst.
         Property,     ///< One of the U*Property classes (see FieldObject::property->type).
         TextBuffer,   ///< UTextBuffer (not a UField, but part of class data).
+        MetaData,     ///< UMetaData (an object containing tags for fields).
     };
 
     /// @brief "Class", "State", … for @p kind.
@@ -256,13 +258,20 @@ namespace UnrealLib
         FString text;          ///< Text.
     };
 
+    /// @brief Metadata tags for a single field. Older packages identify it by path.
+    struct FieldMetadata
+    {
+        std::variant<FString, ObjectIndex> field;
+        std::vector<std::pair<FName, FString>> tags;
+    };
+
     /// @brief A deserialized reflection object.
     struct FieldObject
     {
         FieldKind kind = FieldKind::Property;    ///< Kind.
         ObjectHeader header;                     ///< UObject header.
         std::vector<Property> properties;        ///< Tagged properties preceding the UField data (usually none).
-        FieldData field;                         ///< UField data (not for TextBuffer).
+        FieldData field;                         ///< UField data, when present.
         std::optional<StructData> structure;     ///< Struct, ScriptStruct, Function, State, Class.
         std::optional<FunctionData> function;    ///< Function.
         std::optional<StateData> state;          ///< State, Class.
@@ -272,6 +281,7 @@ namespace UnrealLib
         std::optional<FString> const_value;      ///< Const.
         std::optional<PropertyData> property;    ///< Property.
         std::optional<TextBufferData> text_buffer; ///< TextBuffer.
+        std::vector<FieldMetadata> metadata;       ///< MetaData.
         std::vector<Property> struct_defaults;   ///< Plain UStruct default properties.
         std::size_t end_offset = 0;              ///< Bytes consumed from the export data.
     };
@@ -291,8 +301,8 @@ namespace UnrealLib
     /// @brief Reads a reflection object of kind @p kind from the start of its export data.
     ///
     /// Layout (upstream `UObject`/`UField`/`UStruct`/`UState`/`UClass`/`UFunction`/`U*Property`/`UEnum`/`UConst`/
-    /// `UTextBuffer` `Deserialize`, default UE3 branch). Classes have no tagged properties before the UField data;
-    /// every other kind does. Bytecode is skipped using ScriptSize (in-memory size); for versions where memory and
+    /// `UTextBuffer`/`UMetaData` `Deserialize`, default UE3 branch). Classes have no tagged properties before the
+    /// UField data. Bytecode is skipped using ScriptSize (in-memory size); for versions where memory and
     /// storage sizes differ (>= 587, or < 343) the bytecode is decoded to find its end.
     /// @param reader        Reader over the export data, positioned at its start.
     /// @param kind          Kind of reflection object.

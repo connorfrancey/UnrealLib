@@ -25,27 +25,46 @@ purpose. The numbers come from the corpus sweeps (`UNREALLIB_FIXTURE_SWEEP=1`) a
 | Package summary | yes | yes | All 2,426 summaries identical to upstream's; re-serialized summaries byte-identical |
 | Compressed packages (LZO/zlib) | chunk records only, no decompression | full decompression (LZO1X, zlib) and LZO/zlib compression | All 1,553 compressed packages decompress to their declared sizes |
 | Name / import / export / depends tables | yes | yes | Identical to upstream's for all 873 uncompressed packages (upstream cannot read compressed tables); all 2,426 validate |
-| Thumbnails, GUID tables (≥ 584 / ≥ 623) | yes | detected, not parsed | n/a (Mirror's Edge is 536) |
+| Thumbnails, GUID tables (≥ 584 / ≥ 623) | yes | parsed; package writer relocates tables and images in the preserved header | Synthetic tests cover uncompressed, LZO, and zlib output. A rewrite check on 501 Dishonored and A Story About My Uncle packages covered 13 thumbnails and 3 populated GUID tables |
 | Cross-package import resolution | no (per-package objects) | `Linker` | 179,461 imports resolve to exports, 6,547 to native-only classes or their members; the 90 unresolved point at content missing from the modded install |
 | UObject header (state frame, component template, NetIndex) | yes | yes | 2,525,148 exports |
 | Tagged properties | yes (values as display text) | typed values, byte-exact write-back, text format and parse | 9,656,419 properties re-serialize byte-identically; with a `ReflectionSchema` all 1,639,154 arrays decode; tags of 58,845 script-package objects match upstream's; upstream fails on 381 objects whose properties UnrealLib reads |
 | MapProperty values | yes | kept as raw bytes | none occur in the corpus |
+| FixedArrayProperty values | schema-backed | decoded and written using the declared element count; raw fallback for missing schema or malformed values | Synthetic binary and text round-trip coverage |
 | Reflection (UField…UClass, UEnum, UConst, UTextBuffer) | yes | yes | Every reflection export consumes its data exactly |
+| Field metadata (UMetaData) | yes | Tagged metadata with field paths through version 540 and object indices from 541 | Both layouts covered by synthetic tests |
 | Bytecode decoding | yes (interleaved with decompiling) | separate decoder | 13,770 scripts / 477,343 tokens end exactly at ScriptSize; 439,779 tokens of 12,097 scripts identical to upstream's (positions, opcodes, native indices) |
 | UnrealScript decompiler | yes | yes (`UnrealScriptDecompiler`) | 13,244 functions/states (13,241 fully structured); 2,338 whole classes without placeholders ([decompiler.md](decompiler.md)) |
 | Textures | reads Texture2D data; no pixel decoding | Texture2D family, TextureCube; PNG/TGA/DDS | 58,960 parse; 57,835 decode at their largest mip, including mips streamed from other packages ([assets.md](assets.md)) |
-| Sounds | yes | SoundNodeWave extraction (Ogg Vorbis) | 78,049 parse, 78,048 extract (1 has no data) |
+| Movie and volume textures | standard UE3 native layouts | `TextureMovie` and `Texture3D` native readers using the bulk-data format introduced in version 266 | 37 movie exports parse and available inline payloads load. Synthetic coverage for volume textures |
+| Sounds | yes | Default UE3 SoundNodeWave layout from version 249, including lazy arrays before 266 and native channel tables at 385–419 | 78,049 parse, 78,048 extract (1 has no data). Earlier layouts covered by synthetic tests |
 | Static meshes | no reader | yes (OBJ) | 19,007 parse (35.1 M vertices) |
 | Skeletal meshes | no reader | yes (ActorX PSK) | 742 parse |
 | Animations | no reader | AnimSequence/AnimSet (ActorX PSA) | 6,938 sequences decode |
 | Materials | object data | parameters, textures, expressions (JSON) | 29,392 read |
 | Brushes (Polys, Model) | yes | Polys read/write; Model up to its Polys reference | All 9,392 of each; `write_polys` byte-identical |
-| BSP tree, terrain, fonts, particles, physics assets | some (UModel, UFont, …) | raw bytes | not decoded |
+| BSP ModelComponent | Model and ZoneIndex | Model and ZoneIndex for file version 536 | All 2,572 components reference a Model |
+| Fonts | `UFont` and `UMultiFont` | Native glyphs, remapping, the pre-511 MultiFont resolution table, and Mirror's Edge kerning tables. Tagged glyph and texture arrays from version 511 | All 85 Font and 270 MultiFont exports parse. Synthetic coverage spans the upstream font version boundaries |
+| Remaining BSP, terrain, particles, physics assets | varies by class and branch | native bytes preserved | BSP readers cover the prefixes listed above |
 | T3D export | yes (`Eliot.UELib.Decompiler.T3D`, brushes included) | levels and objects, brushes included | 680 levels, 152,965 actors, 7,958 brushes; exact text round trip |
 | T3D import into packages | no | existing objects (properties, brush polygons) | Every level's unmodified export re-imports with 0 changes (338,507 objects); edits round-trip through write → reload → export |
 | Package writing | summary/table serializers (`PackageSerializer`) | `PackageModel` + `write_package` (uncompressed, LZO, zlib) | All 873 uncompressed packages rewritten byte-identically; all 1,553 compressed ones reload with identical tables and export data |
 | Package validation | no | `validate_package`, `UnrealPackageValidator` | 2,426 packages, 0 errors |
 | UE1/UE2/UE4 branches, per-game crypto | yes (many games) | no | out of scope for the initial target |
+
+## Open UE3 reader coverage
+
+| Area | Remaining work | Verification |
+|---|---|---|
+| Typed maps | Confirm the serialized key/value layout before implementing binary and text round trips | A package with a populated tag plus a synthetic round-trip test |
+| Texture subclasses | Compare render-target native fields before version 297 and source-art records before 266 with the relevant UELib layouts | Version-boundary packages and exact native consumption |
+| Light components | Add native convex volumes within upstream's version window. Dominant light shadow-map prefixes already have object-header coverage | Version-boundary fixtures and truncated-array tests |
+| Other UE3 branches | Inventory game-specific reflection layouts, opcode maps, bulk data, and native readers against the pinned source | Representative packages per branch and differential checks where upstream can deserialize them |
+
+The Dishonored and A Story About My Uncle name-table scan covered 501 package files, including one local unpacked
+copy. Seven contained the name `MapProperty`. The property sweeps found zero map tags in the readable objects.
+They reported 334 and 77 objects whose class hierarchies could not be resolved, respectively. Maps remain losslessly
+preserved as raw bytes until a populated payload can be verified.
 
 ## Behavioural differences from upstream
 

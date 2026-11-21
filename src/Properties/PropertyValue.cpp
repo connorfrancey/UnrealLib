@@ -224,13 +224,30 @@ namespace UnrealLib
             }
             case PropertyType::Struct: out.value = read_struct(reader, type.struct_name, state, depth); break;
             case PropertyType::Array:
+            case PropertyType::FixedArray:
             {
                 if (!type.inner)
                 {
                     throw SerializationError("array element type unknown", reader.absolute_position());
                 }
                 ArrayValue array;
-                array.count = static_cast<std::int32_t>(reader.read_array_count(1));
+                array.fixed_size = type.type == PropertyType::FixedArray;
+                if (array.fixed_size)
+                {
+                    const auto& limits = reader.context().limits;
+                    if (type.fixed_count < 0 ||
+                        static_cast<std::uint32_t>(type.fixed_count) > limits.max_array_count ||
+                        static_cast<std::uint32_t>(type.fixed_count) > limits.max_allocation_bytes / sizeof(PropertyValue) ||
+                        static_cast<std::size_t>(type.fixed_count) > reader.remaining())
+                    {
+                        throw SerializationError("invalid fixed array count", reader.absolute_position());
+                    }
+                    array.count = type.fixed_count;
+                }
+                else
+                {
+                    array.count = static_cast<std::int32_t>(reader.read_array_count(1));
+                }
                 array.elements.reserve(static_cast<std::size_t>(array.count));
                 for (std::int32_t i = 0; i < array.count; ++i)
                 {
@@ -336,8 +353,17 @@ namespace UnrealLib
                 out.value = std::move(array);
                 break;
             }
-            case PropertyType::Map:
             case PropertyType::FixedArray:
+            {
+                const auto property = state.schema.find_property(owner, name);
+                if (property && property->type == PropertyType::FixedArray && property->inner)
+                {
+                    out = read_element(reader, *property, state, owner, depth);
+                    break;
+                }
+                [[fallthrough]];
+            }
+            case PropertyType::Map:
             case PropertyType::Pointer:
             case PropertyType::String:
             case PropertyType::Unknown:
@@ -520,7 +546,17 @@ namespace UnrealLib
             }
             void operator()(const ArrayValue& v) const
             {
-                writer.write_i32(v.count);
+                if (v.fixed_size)
+                {
+                    if (v.raw || v.count < 0 || v.elements.size() != static_cast<std::size_t>(v.count))
+                    {
+                        throw SerializationError("invalid fixed array value", writer.position());
+                    }
+                }
+                else
+                {
+                    writer.write_i32(v.count);
+                }
                 if (v.raw)
                 {
                     writer.write_bytes(*v.raw);

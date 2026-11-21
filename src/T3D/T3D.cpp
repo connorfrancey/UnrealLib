@@ -520,7 +520,7 @@ namespace UnrealLib::T3D
                     block.layout += 'p';
                 };
                 const auto* array = std::get_if<ArrayValue>(&p.value.value);
-                if (array != nullptr && array->decoded() && !array->elements.empty())
+                if (array != nullptr && !array->fixed_size && array->decoded() && !array->elements.empty())
                 {
                     for (std::size_t i = 0; i < array->elements.size(); ++i)
                     {
@@ -849,7 +849,7 @@ namespace UnrealLib::T3D
                 {
                     const std::optional<TypeDesc> type = property_type(class_name, p.name);
                     const TypeDesc* type_ptr = type ? &*type : nullptr;
-                    if (std::holds_alternative<ArrayValue>(p.value.value))
+                    if (const auto* array = std::get_if<ArrayValue>(&p.value.value); array && !array->fixed_size)
                     {
                         const std::vector<const T3DProperty*> texts = take_array(p.name);
                         if (texts.empty()) continue; // removed

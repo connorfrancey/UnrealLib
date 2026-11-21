@@ -10,6 +10,7 @@
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Linker/Linker.hpp>
 #include <UnrealLib/Package/Package.hpp>
+#include <UnrealLib/Serialization/BinaryWriter.hpp>
 #include <UnrealLib/Serialization/Compression.hpp>
 #include <UnrealLib/Writer/PackageWriter.hpp>
 
@@ -131,6 +132,86 @@ TEST_P(PackageWriterCompressionTests, CompressedOutputReloadsWithSameContents)
     EXPECT_EQ(reloaded.depends(), package.depends());
     // Writing the reloaded package uncompressed reproduces the uncompressed rewrite of the original.
     EXPECT_EQ(write_package(PackageModel::from_package(reloaded)), write_package(model));
+}
+
+TEST_P(PackageWriterCompressionTests, RelocatesUe3ThumbnailImagesAndGuidTables)
+{
+    auto spec = make_basic_spec();
+    spec.file_version = 868;
+    spec.licensee_version = 0;
+    const auto base = load(build_synthetic_package(spec).file);
+    auto model = PackageModel::from_package(base);
+    ASSERT_TRUE(model.header_tail.empty());
+    ASSERT_EQ(model.header_tail_offset, static_cast<std::size_t>(base.summary().header_size));
+    const auto tail_start = base.summary().header_size;
+    const auto image = bytes_of({0x89, 0x50, 0x4E, 0x47});
+    const Guid import_guid{1, 2, 3, 4};
+    const Guid export_guid{5, 6, 7, 8};
+    const auto export_index = ObjectIndex::from_export(0);
+
+    BinaryWriter tail(base.context());
+    model.summary.import_export_guids_offset = tail_start;
+    model.summary.import_guids_count = 1;
+    model.summary.export_guids_count = 1;
+    tail.write_fstring("TestLevel");
+    tail.write_i32(1);
+    tail.write_guid(import_guid);
+    tail.write_guid(export_guid);
+    tail.write_i32(export_index.value);
+
+    const auto image_offset = tail_start + static_cast<std::int32_t>(tail.position());
+    tail.write_i32(64);
+    tail.write_i32(32);
+    tail.write_i32(static_cast<std::int32_t>(image.size()));
+    tail.write_bytes(image);
+    model.summary.thumbnail_table_offset = tail_start + static_cast<std::int32_t>(tail.position());
+    tail.write_i32(2);
+    tail.write_fstring("Texture2D");
+    tail.write_fstring("TestPkg.MyTexture");
+    tail.write_i32(image_offset);
+    tail.write_fstring("Texture2D");
+    tail.write_fstring("TestPkg.Empty");
+    tail.write_i32(0);
+    model.header_tail = tail.take();
+
+    const auto original = write_package(model);
+    const auto original_package = load(original);
+    auto edited = PackageModel::from_package(original_package);
+    EXPECT_EQ(write_package(edited), original);
+    edited.add_name("AnExtraNameToMoveTheHeader");
+
+    WriteOptions options;
+    options.compression = GetParam();
+    options.chunk_size = 128;
+    options.block_size = 32;
+    const auto reloaded = load(write_package(edited, options));
+    EXPECT_GT(reloaded.summary().import_export_guids_offset, original_package.summary().import_export_guids_offset);
+    EXPECT_GT(reloaded.summary().thumbnail_table_offset, original_package.summary().thumbnail_table_offset);
+    ASSERT_EQ(reloaded.thumbnails().size(), 2u);
+    EXPECT_GT(reloaded.thumbnails()[0].data_offset, image_offset);
+    EXPECT_EQ(reloaded.thumbnails()[0].object_path.text, "TestPkg.MyTexture");
+    const auto thumbnail = reloaded.thumbnail_image(0);
+    ASSERT_TRUE(thumbnail);
+    EXPECT_EQ(thumbnail->width, 64);
+    EXPECT_EQ(thumbnail->height, 32);
+    EXPECT_EQ(std::vector<std::byte>(thumbnail->encoded.begin(), thumbnail->encoded.end()), image);
+    EXPECT_FALSE(reloaded.thumbnail_image(1));
+    ASSERT_EQ(reloaded.import_guids().size(), 1u);
+    EXPECT_EQ(reloaded.import_guids()[0].level_name.text, "TestLevel");
+    EXPECT_EQ(reloaded.import_guids()[0].object_guids, std::vector<Guid>{import_guid});
+    ASSERT_EQ(reloaded.export_guids().size(), 1u);
+    EXPECT_EQ(reloaded.export_guids()[0].guid, export_guid);
+    EXPECT_EQ(reloaded.export_guids()[0].object, export_index);
+}
+
+TEST(PackageWriterTests, RejectsThumbnailTableOutsidePreservedHeader)
+{
+    auto spec = make_basic_spec();
+    spec.file_version = 868;
+    spec.licensee_version = 0;
+    auto model = PackageModel::from_package(load(build_synthetic_package(spec).file));
+    model.summary.thumbnail_table_offset = model.exports.front().serial_offset;
+    EXPECT_THROW((void)write_package(model), UnsupportedError);
 }
 
 INSTANTIATE_TEST_SUITE_P(Methods, PackageWriterCompressionTests,

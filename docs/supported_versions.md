@@ -22,10 +22,10 @@ Checked with the corpus sweeps pointed at two more Steam installations (`UNREALL
 | Tagged properties | 89,060 objects; the 77 failures are objects whose UT base classes are not shipped | 1,334,321 objects, 6,379,669 properties, byte-exact round trip; 334 objects with unshipped classes |
 | Reflection + bytecode | 12,801 scripts, 487,178 tokens, 0 failures | 4,785 scripts, 0 failures |
 | Import resolution | 6,046 exports, 278 intrinsic; the rest point at packages the game does not ship | 105,707 exports, 3,136 intrinsic (with `index_forced_exports()`); 7 to editor/unshipped packages, 48 objects absent from the forced copies |
-| Textures | all 874 decode (430 from `.tfc` texture file caches) | not yet swept |
-| Sounds | all 579 SoundNodeWaves read, 579 Ogg payloads extracted | not yet swept |
-| Animations | all 358 AnimSequences decode (309 per-track, 46 variable-key); frame 0 of 25,913 tracks matches RawAnimData | not yet swept |
-| Meshes | all 85 StaticMeshes (34,608 vertices) and 18 SkeletalMeshes (81,225 vertices) read, native data consumed exactly | not yet swept (801 mesh layouts are not supported) |
+| Textures | all 874 decode (430 from `.tfc` texture file caches) | 77,807 decode across the baseline and lightmap sweeps, including all 19,626 `LightMapTexture2D` exports. 49,506 largest mips load from outside their package. 423 texture cubes parse |
+| Sounds | all 579 SoundNodeWaves read, 579 Ogg payloads extracted | the asset sweep found no `SoundNodeWave` exports |
+| Animations | all 358 AnimSequences decode (309 per-track, 46 variable-key); frame 0 of 25,913 tracks matches RawAnimData | compressed streams with no decoded track offsets fail the coverage check. AnimSet track counts also mismatch |
+| Meshes | all 85 StaticMeshes (34,608 vertices) and 18 SkeletalMeshes (81,225 vertices) read, native data consumed exactly | 21,658 StaticMeshes and 1,910 SkeletalMeshes hit the version 801 layout guards |
 | Package rewrite | 30 / 30 round-trip | not yet swept |
 
 What made these work (all gated by file version or profile, so Mirror's Edge is unchanged):
@@ -38,6 +38,7 @@ What made these work (all gated by file version or profile, so Mirror's Edge is 
   / ≥ 682);
 * Texture2D mobile mip caches (PVRTC ≥ 674, ATITC + Flash ≥ 857, ETC ≥ 864) and `.tfc` texture file caches
   (`Linker::find_texture_file_cache`);
+* Dishonored's `LightMapTexture2D` trailing 32-bit word, exposed through `Texture2D::lightmap_trailing_word`;
 * imports of members of native-only classes classify as intrinsic;
 * seek-free games without the original package files: `Linker::index_forced_exports()` resolves imports through
   forced exports in other packages;
@@ -53,6 +54,8 @@ What made these work (all gated by file version or profile, so Mirror's Edge is 
 Not supported yet: StaticMesh layouts of file versions 770–867 and SkeletalMesh layouts of 592–867 (only 536 and 868
 are verified; the readers reject the versions in between with `UnsupportedError`), non-empty skeletal
 VertexInfluences, packed (console) skeletal positions.
+The Dishonored asset sweep also encountered unsupported version 801 BSP layouts in `Polys`, `Model`, and
+`ModelComponent`.
 
 ## Mirror's Edge PC — verification record
 
