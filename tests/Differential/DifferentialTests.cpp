@@ -11,13 +11,18 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <iterator>
+#include <limits>
 #include <map>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <fmt/format.h>
@@ -521,4 +526,574 @@ TEST_F(DifferentialTest, ObjectsMatch)
               << " of them\n";
     for (const auto& [kind, n] : mismatches) std::cout << "  " << n << " mismatching " << kind << '\n';
     if (packages == 0) GTEST_SKIP() << "no dump has objects (regenerate the UELib dumps)";
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Parity report: one accuracy percentage for the port.
+//
+// Every item that both libraries produce for the dumped packages is scored as matching or not, per area: summary
+// fields, game detection, name/import/export/depends rows, property tags, bytecode tokens and script storage sizes.
+// Documented upstream deviations (compressed-chunk field order, DelegateProperty reported as StringProperty, token
+// storage positions) are normalized exactly as in the tests above, so they do not count against the port. Objects and
+// packages that upstream itself fails to read have no reference value and are reported separately ("beyond upstream").
+//
+// Prints a table and records the percentages as test properties. Optional environment variables:
+//   UNREALLIB_PARITY_MIN_PERCENT  fail when the overall (area-weighted) accuracy is below this value
+//   UNREALLIB_PARITY_REPORT       also write the report as JSON to this path
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace
+{
+    struct Tally
+    {
+        std::size_t matched = 0;
+        std::size_t total = 0;
+
+        void add(bool match)
+        {
+            matched += match ? 1 : 0;
+            ++total;
+        }
+
+        [[nodiscard]] double percent() const
+        {
+            return total == 0 ? 100.0 : 100.0 * static_cast<double>(matched) / static_cast<double>(total);
+        }
+    };
+
+    /// Element-wise comparison of two arrays: every index present in either counts once. A non-array @p ours (an
+    /// error message) scores every upstream element, and at least one item, as a mismatch.
+    void tally_rows(Tally& tally, const json& ours, const json& upstream)
+    {
+        if (!ours.is_array())
+        {
+            tally.total += std::max<std::size_t>(upstream.size(), 1);
+            return;
+        }
+        const std::size_t rows = std::max(ours.size(), upstream.size());
+        for (std::size_t i = 0; i < rows; ++i)
+        {
+            tally.add(i < ours.size() && i < upstream.size() && ours[i] == upstream[i]);
+        }
+    }
+
+    /// Token streams compared as sets of [position, code]: matched = intersection, total = union, so missing and
+    /// extra tokens both count.
+    void tally_tokens(Tally& tally, const json& ours, const json& upstream)
+    {
+        if (!ours.is_array())
+        {
+            tally.total += std::max<std::size_t>(upstream.size(), 1);
+            return;
+        }
+        std::vector<json> a(ours.begin(), ours.end());
+        std::vector<json> b(upstream.begin(), upstream.end());
+        std::sort(a.begin(), a.end());
+        std::sort(b.begin(), b.end());
+        std::vector<json> common;
+        std::set_intersection(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(common));
+        tally.matched += common.size();
+        tally.total += a.size() + b.size() - common.size();
+    }
+
+    /// Rounded down to two decimals, so that 100.00% is only shown when every item matches.
+    double floor2(double percent)
+    {
+        return std::floor(percent * 100.0) / 100.0;
+    }
+
+    const std::vector<std::string>& parity_areas()
+    {
+        static const std::vector<std::string> areas = {
+            "Package summary fields", "Game detection",     "Name table rows", "Import table rows",
+            "Export table rows",      "Depends table rows", "Property tags",   "Bytecode tokens",
+            "Script storage sizes"};
+        return areas;
+    }
+}
+
+TEST_F(DifferentialTest, ParityReport)
+{
+    std::map<std::string, Tally> areas;
+    std::size_t packages = 0, upstream_failed_packages = 0, read_where_upstream_failed_packages = 0;
+    std::size_t upstream_failed_objects = 0, read_where_upstream_failed_objects = 0;
+
+    for (const auto& e : m_entries)
+    {
+        if (e.upstream.contains("error"))
+        {
+            ++upstream_failed_packages;
+            try
+            {
+                (void)Package::open(e.package);
+                ++read_where_upstream_failed_packages;
+            }
+            catch (const Error&)
+            {
+            }
+            continue;
+        }
+        ++packages;
+
+        // Summary, field by field (compressed chunks in upstream's documented field order).
+        const json& upstream_summary = e.upstream.at("summary");
+        try
+        {
+            const auto bytes = read_file(e.package, 1ull << 31);
+            BinaryReader reader(bytes);
+            const PackageSummary summary = read_package_summary(reader);
+            json ours = summary_json(summary);
+            ours["compressed_chunks"] = expected_upstream_chunks(summary);
+            for (const auto& [key, value] : upstream_summary.items())
+            {
+                areas["Package summary fields"].add(ours.contains(key) && ours.at(key) == value);
+            }
+            const auto detection = GameProfileRegistry::builtin().detect(summary);
+            const bool upstream_me = e.upstream.at("upstream_build").get<std::string>() == "MirrorsEdge";
+            areas["Game detection"].add(detection.profile != nullptr &&
+                                        (detection.profile->id == "mirrorsedge-pc") == upstream_me);
+        }
+        catch (const Error&)
+        {
+            areas["Package summary fields"].total += upstream_summary.size();
+            areas["Game detection"].total += 1;
+        }
+
+        // Tables (upstream reads them for uncompressed packages only).
+        if (e.upstream.at("tables_loaded").get<bool>())
+        {
+            json ours;
+            try
+            {
+                ours = tables_json(Package::open(e.package));
+            }
+            catch (const Error& error)
+            {
+                ours = {{"names", error.what()}, {"imports", error.what()}, {"exports", error.what()},
+                        {"depends", error.what()}};
+            }
+            tally_rows(areas["Name table rows"], ours.at("names"), e.upstream.at("names"));
+            tally_rows(areas["Import table rows"], ours.at("imports"), e.upstream.at("imports"));
+            tally_rows(areas["Export table rows"], ours.at("exports"), e.upstream.at("exports"));
+            tally_rows(areas["Depends table rows"], ours.at("depends"), e.upstream.at("depends"));
+        }
+
+        // Objects of script packages: property tags and bytecode.
+        if (!e.upstream.contains("objects")) continue;
+        Linker linker;
+        linker.add_search_path(fixture_dir());
+        const Package* package = nullptr;
+        try
+        {
+            package = &linker.load(e.package);
+        }
+        catch (const Error&)
+        {
+        }
+        for (const json& o : e.upstream.at("objects"))
+        {
+            const auto index = o.at("export").get<std::size_t>();
+            const bool exists = package != nullptr && index < package->exports().size();
+            const ObjectRef ref{package, ObjectIndex::from_export(index)};
+            if (!o.at("ok").get<bool>())
+            {
+                ++upstream_failed_objects;
+                try
+                {
+                    if (exists)
+                    {
+                        (void)property_tags_json(linker, ref);
+                        ++read_where_upstream_failed_objects;
+                    }
+                }
+                catch (const Error&)
+                {
+                }
+                continue;
+            }
+
+            json ours_tags = "error: export missing";
+            if (exists)
+            {
+                try
+                {
+                    ours_tags = property_tags_json(linker, ref);
+                }
+                catch (const Error& error)
+                {
+                    ours_tags = std::string("error: ") + error.what();
+                }
+            }
+            tally_rows(areas["Property tags"], ours_tags, o.at("properties"));
+
+            if (!o.contains("script")) continue;
+            json upstream_tokens = json::array();
+            for (const json& t : o.at("script").at("tokens")) upstream_tokens.push_back(json::array({t[0], t[2]}));
+            std::size_t storage = 0;
+            json ours_tokens = "error: export missing";
+            if (exists)
+            {
+                try
+                {
+                    ours_tokens = script_tokens_json(linker, ref, storage);
+                }
+                catch (const Error& error)
+                {
+                    ours_tokens = std::string("error: ") + error.what();
+                }
+            }
+            tally_tokens(areas["Bytecode tokens"], ours_tokens, upstream_tokens);
+            areas["Script storage sizes"].add(ours_tokens.is_array() &&
+                                              storage == o.at("script").at("storage_size").get<std::size_t>());
+        }
+    }
+
+    // Overall: area-weighted (each feature area counts equally) is the headline; item-weighted is dominated by the
+    // largest areas (names, tokens) and is shown for reference.
+    Tally all;
+    double area_sum = 0.0;
+    std::size_t area_count = 0;
+    json report = {{"packages", packages}, {"areas", json::array()}};
+    std::ostringstream table;
+    table << fmt::format("\n  UELib parity report ({} packages compared with upstream UELib)\n", packages);
+    table << fmt::format("  {:<26} {:>12} {:>12} {:>10}\n", "Area", "Matched", "Compared", "Accuracy");
+    for (const std::string& name : parity_areas())
+    {
+        const Tally& t = areas[name];
+        if (t.total == 0)
+        {
+            table << fmt::format("  {:<26} {:>12} {:>12} {:>10}\n", name, "-", "-", "n/a");
+            continue;
+        }
+        table << fmt::format("  {:<26} {:>12} {:>12} {:>9.2f}%\n", name, t.matched, t.total,
+                             floor2(t.percent()));
+        report["areas"].push_back(
+            {{"area", name}, {"matched", t.matched}, {"compared", t.total}, {"percent", t.percent()}});
+        RecordProperty("parity." + name, fmt::format("{:.4f}", t.percent()));
+        all.matched += t.matched;
+        all.total += t.total;
+        area_sum += t.percent();
+        ++area_count;
+    }
+    if (area_count == 0) GTEST_SKIP() << "no comparable data in the UELib dumps";
+
+    const double overall = area_sum / static_cast<double>(area_count);
+    table << fmt::format("  {:<52} {:>9.2f}%\n", "Overall accuracy (areas weighted equally)", floor2(overall));
+    table << fmt::format("  {:<52} {:>9.2f}%\n", "Overall accuracy (every compared item)", floor2(all.percent()));
+    table << fmt::format("  Beyond upstream: UnrealLib reads {} of {} packages and the properties of {} of {} "
+                         "objects that upstream fails on\n",
+                         read_where_upstream_failed_packages, upstream_failed_packages,
+                         read_where_upstream_failed_objects, upstream_failed_objects);
+    std::cout << table.str();
+
+    report["overall_percent"] = overall;
+    report["overall_item_percent"] = all.percent();
+    report["beyond_upstream"] = {{"packages_upstream_failed", upstream_failed_packages},
+                                 {"packages_read", read_where_upstream_failed_packages},
+                                 {"objects_upstream_failed", upstream_failed_objects},
+                                 {"objects_read", read_where_upstream_failed_objects}};
+    RecordProperty("parity.overall", fmt::format("{:.4f}", overall));
+    RecordProperty("parity.overall_items", fmt::format("{:.4f}", all.percent()));
+
+    if (const std::string path = env("UNREALLIB_PARITY_REPORT"); !path.empty())
+    {
+        std::ofstream out(utf8_path(path), std::ios::binary);
+        out << report.dump(2) << '\n';
+        EXPECT_TRUE(out.good()) << "could not write " << path;
+    }
+    if (const std::string minimum = env("UNREALLIB_PARITY_MIN_PERCENT"); !minimum.empty())
+    {
+        EXPECT_GE(overall, std::stod(minimum)) << "UELib parity below UNREALLIB_PARITY_MIN_PERCENT";
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Speed comparison: UnrealLib (C++) vs. upstream UELib (C#).
+//
+// The CTest fixture "Differential.UELibBench.Run" runs `UELibDump --bench` (see Program.cs), which times upstream on
+// two workloads and writes per-package times. This test runs the same workloads on the same packages with UnrealLib,
+// using the same method (one warm-up pass over all packages, then the minimum of N runs per package), and prints the
+// speedup (upstream time / UnrealLib time):
+//
+//   load     open the package: summary and name/import/export/depends tables (upstream: UnrealLoader.LoadPackage;
+//            UnrealLib: Package::open, which also reads all export data into memory)
+//   objects  open a script package and read every export: property tags, reflection data and bytecode tokens
+//            (upstream: InitializePackage(All) + Load; UnrealLib: Linker::read_properties / read_field +
+//            decode_script). Upstream never loads other packages, so the packages UnrealLib's Linker needs to resolve
+//            imported classes are loaded before the clock starts.
+//
+// Release builds only (in Debug builds the numbers are meaningless and the test skips). Optional environment
+// variables: UNREALLIB_UELIB_BENCH_FILE (upstream results), UNREALLIB_BENCH_ITERATIONS (default: upstream's count),
+// UNREALLIB_BENCH_DETAILS (print per-package times), UNREALLIB_SPEED_REPORT (also write the results as JSON to this
+// path), UNREALLIB_MIN_SPEEDUP (fail when the overall speedup is below this factor).
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace
+{
+    fs::path bench_file()
+    {
+        const std::string value = env("UNREALLIB_UELIB_BENCH_FILE");
+#ifdef UNREALLIB_DEFAULT_UELIB_BENCH_FILE
+        return utf8_path(value.empty() ? std::string(UNREALLIB_DEFAULT_UELIB_BENCH_FILE) : value);
+#else
+        return utf8_path(value);
+#endif
+    }
+
+    using bench_clock = std::chrono::steady_clock;
+
+    double elapsed_ms(bench_clock::time_point start)
+    {
+        return std::chrono::duration<double, std::milli>(bench_clock::now() - start).count();
+    }
+
+    /// Opens the package (summary and tables). Returns the timed milliseconds; @p sink receives a value that depends
+    /// on the work, so it cannot be optimized away.
+    double bench_load(const fs::path& file, std::size_t& sink)
+    {
+        const auto start = bench_clock::now();
+        const Package package = Package::open(file);
+        sink += package.names().size() + package.imports().size() + package.exports().size();
+        return elapsed_ms(start);
+    }
+
+    /// Names of the packages @p package imports from (top-level imports of class Package).
+    std::vector<std::string> imported_packages(const Package& package)
+    {
+        std::vector<std::string> out;
+        for (const ImportEntry& import : package.imports())
+        {
+            if (import.outer.is_null() && package.names().to_string(import.class_name) == "Package")
+            {
+                out.push_back(package.names().to_string(import.object_name));
+            }
+        }
+        return out;
+    }
+
+    /// The packages @p file depends on, transitively (cached: computing it opens the packages).
+    const std::vector<std::string>& dependencies_of(const fs::path& file)
+    {
+        static std::map<fs::path, std::vector<std::string>> cache;
+        if (const auto it = cache.find(file); it != cache.end()) return it->second;
+        Linker linker;
+        linker.add_search_path(file.parent_path(), false);
+        std::vector<std::string> result;
+        std::vector<std::string> pending = imported_packages(Package::open(file));
+        const std::string self = file.stem().string();
+        while (!pending.empty())
+        {
+            const std::string name = pending.back();
+            pending.pop_back();
+            const auto same = [&](const std::string& other) {
+                return Text::iequals(other, name);
+            };
+            if (Text::iequals(name, self) || std::any_of(result.begin(), result.end(), same)) continue;
+            const Package* dependency = linker.find_package(name);
+            if (dependency == nullptr) continue;
+            result.push_back(name);
+            for (std::string next : imported_packages(*dependency)) pending.push_back(std::move(next));
+        }
+        return cache.emplace(file, std::move(result)).first->second;
+    }
+
+    /// Reads every export of a script package: reflection data and bytecode for fields, property tags otherwise.
+    ///
+    /// Upstream never loads other packages. UnrealLib's Linker loads the packages that define imported classes (to
+    /// resolve class hierarchies) and indexes each one's exports on first use; a Linker that reads many packages pays
+    /// for that once. So before the clock starts, the dependencies are loaded and indexed by resolving the imports of
+    /// a copy of the package registered under another name. The timed part loads the package itself, with empty
+    /// caches of its own, and reads it.
+    double bench_objects(const fs::path& file, std::size_t& sink)
+    {
+        Linker linker;
+        linker.add_search_path(file.parent_path(), false);
+        for (const std::string& dependency : dependencies_of(file)) (void)linker.find_package(dependency);
+        {
+            Package copy;
+            copy.load_from_memory(read_file(file, 1ull << 31), "__bench_warmup_" + file.stem().string());
+            const Package& warm = linker.add(std::move(copy));
+            for (std::size_t i = 0; i < warm.imports().size(); ++i)
+            {
+                (void)linker.resolve(warm, ObjectIndex::from_import(i));
+            }
+        }
+
+        const auto start = bench_clock::now();
+        const Package& package = linker.load(file);
+        const TokenMap map = TokenMap::ue3(package.summary().file_version, &package.profile());
+        BytecodeOptions options;
+        options.token_map = &map;
+        options.name_count = static_cast<std::int32_t>(package.names().size());
+        options.none_index = package.names().find("None").value_or(-1);
+
+        std::size_t items = 0;
+        for (std::size_t i = 0; i < package.exports().size(); ++i)
+        {
+            const ObjectRef ref{&package, ObjectIndex::from_export(i)};
+            try
+            {
+                if (field_kind_of(package.class_name(ref.index)))
+                {
+                    const FieldObject field = linker.read_field(ref);
+                    items += field.properties.size() + 1;
+                    if (field.structure && field.structure->script_size > 0)
+                    {
+                        BinaryReader reader(package.export_data(i), package.context());
+                        reader.seek(field.structure->script_offset);
+                        items += decode_script(reader, static_cast<std::size_t>(field.structure->script_size), options)
+                                     .tokens.size();
+                    }
+                }
+                else
+                {
+                    items += linker.read_properties(ref).properties.size();
+                }
+            }
+            catch (const Error&)
+            {
+                // Same as upstream: failures are part of the work, not of the result.
+            }
+        }
+        const double ms = elapsed_ms(start);
+        sink += items;
+        return ms;
+    }
+
+    using BenchWork = double (*)(const fs::path&, std::size_t&);
+
+    struct WorkloadResult
+    {
+        std::size_t packages = 0;
+        double upstream_ms = 0.0;
+        double ours_ms = 0.0;
+        double log_speedup_sum = 0.0; ///< Sum of ln(per-package speedup), for the geometric mean.
+        json details = json::array(); ///< [{package, upstream_ms, unreallib_ms, speedup}]
+
+        [[nodiscard]] double speedup() const { return upstream_ms / ours_ms; }
+        [[nodiscard]] double geomean_speedup() const
+        {
+            return std::exp(log_speedup_sum / static_cast<double>(packages));
+        }
+        [[nodiscard]] json to_json() const
+        {
+            return {{"packages", packages},     {"upstream_ms", upstream_ms},      {"unreallib_ms", ours_ms},
+                    {"speedup", speedup()},     {"geomean_speedup", geomean_speedup()}};
+        }
+    };
+
+    /// One warm-up pass over all packages, then per package the minimum of @p iterations runs (as UELibDump does).
+    WorkloadResult run_workload(const json& upstream_times, int iterations, BenchWork work, std::size_t& sink)
+    {
+        WorkloadResult result;
+        std::vector<std::pair<fs::path, double>> packages;
+        for (const auto& [relative, ms] : upstream_times.items())
+        {
+            packages.emplace_back(fixture_dir() / utf8_path(relative), ms.get<double>());
+        }
+        for (const auto& [file, _] : packages)
+        {
+            (void)work(file, sink);
+        }
+        for (const auto& [file, upstream_ms] : packages)
+        {
+            double best = std::numeric_limits<double>::max();
+            for (int i = 0; i < iterations; ++i)
+            {
+                best = std::min(best, work(file, sink));
+            }
+            ++result.packages;
+            result.upstream_ms += upstream_ms;
+            result.ours_ms += best;
+            result.log_speedup_sum += std::log(upstream_ms / best);
+            result.details.push_back({{"package", file.filename().string()},
+                                      {"upstream_ms", upstream_ms},
+                                      {"unreallib_ms", best},
+                                      {"speedup", upstream_ms / best}});
+        }
+        return result;
+    }
+}
+
+TEST(DifferentialSpeed, SpeedComparison)
+{
+#ifndef NDEBUG
+    GTEST_SKIP() << "speed comparison needs a Release build of UnrealLib";
+#endif
+    const fs::path file = bench_file();
+    if (file.empty() || !fs::is_regular_file(file) || fixture_dir().empty())
+    {
+        GTEST_SKIP() << "no UELib benchmark results (configure with -DUNREALLIB_BUILD_DIFFERENTIAL=ON "
+                        "-DUNREALLIB_MIRRORSEDGE_DIR=... and run through CTest)";
+    }
+    std::ifstream in(file, std::ios::binary);
+    const json upstream = json::parse(in);
+    int iterations = upstream.at("iterations").get<int>();
+    if (const std::string value = env("UNREALLIB_BENCH_ITERATIONS"); !value.empty()) iterations = std::stoi(value);
+
+    std::size_t sink = 0;
+    const std::vector<std::tuple<std::string, std::string, BenchWork>> workloads = {
+        {"load", "Open package (summary + tables)", &bench_load},
+        {"objects", "Read all objects (props + bytecode)", &bench_objects}};
+
+    // Speedup = total upstream time / total UnrealLib time (dominated by the largest packages); the geometric mean
+    // of the per-package speedups weights every package equally.
+    std::ostringstream table;
+    table << fmt::format("\n  Speed: UnrealLib (C++) vs upstream UELib (C#, {}), minimum of {} runs per package\n",
+                         upstream.value("runtime", "?"), iterations);
+    table << fmt::format("  {:<36} {:>8} {:>13} {:>13} {:>9} {:>9}\n", "Workload", "Packages", "UELib (C#)",
+                         "UnrealLib", "Speedup", "Geomean");
+    const bool show_details = !env("UNREALLIB_BENCH_DETAILS").empty();
+    json report = {{"runtime", upstream.value("runtime", "?")}, {"iterations", iterations},
+                   {"workloads", json::array()}};
+    WorkloadResult total;
+    for (const auto& [key, label, work] : workloads)
+    {
+        if (!upstream.contains(key) || upstream.at(key).empty()) continue;
+        const WorkloadResult r = run_workload(upstream.at(key), iterations, work, sink);
+        if (show_details)
+        {
+            table << "  " << label << ":\n";
+            for (const json& d : r.details)
+            {
+                table << fmt::format("    {:<42} {:>10.2f} ms {:>10.2f} ms {:>8.2f}x\n",
+                                     d.at("package").get<std::string>(), d.at("upstream_ms").get<double>(),
+                                     d.at("unreallib_ms").get<double>(), d.at("speedup").get<double>());
+            }
+        }
+        table << fmt::format("  {:<36} {:>8} {:>10.1f} ms {:>10.1f} ms {:>8.1f}x {:>8.1f}x\n", label, r.packages,
+                             r.upstream_ms, r.ours_ms, r.speedup(), r.geomean_speedup());
+        json entry = r.to_json();
+        entry["key"] = key;
+        entry["label"] = label;
+        entry["details"] = r.details;
+        report["workloads"].push_back(std::move(entry));
+        RecordProperty("speedup." + key, fmt::format("{:.2f}", r.speedup()));
+        RecordProperty("speedup_geomean." + key, fmt::format("{:.2f}", r.geomean_speedup()));
+        total.packages += r.packages;
+        total.upstream_ms += r.upstream_ms;
+        total.ours_ms += r.ours_ms;
+        total.log_speedup_sum += r.log_speedup_sum;
+    }
+    if (total.packages == 0) GTEST_SKIP() << "the UELib benchmark results contain no packages";
+
+    const double overall = total.speedup();
+    table << fmt::format("  {:<45} {:>10.1f} ms {:>10.1f} ms {:>8.1f}x {:>8.1f}x\n", "Total", total.upstream_ms,
+                         total.ours_ms, overall, total.geomean_speedup());
+    std::cout << table.str();
+    RecordProperty("speedup.overall", fmt::format("{:.2f}", overall));
+    EXPECT_GT(sink, 0u);
+
+    report["total"] = total.to_json();
+    if (const std::string path = env("UNREALLIB_SPEED_REPORT"); !path.empty())
+    {
+        std::ofstream out(utf8_path(path), std::ios::binary);
+        out << report.dump(2) << '\n';
+        EXPECT_TRUE(out.good()) << "could not write " << path;
+    }
+
+    if (const std::string minimum = env("UNREALLIB_MIN_SPEEDUP"); !minimum.empty())
+    {
+        EXPECT_GE(overall, std::stod(minimum)) << "UnrealLib is less than UNREALLIB_MIN_SPEEDUP times faster";
+    }
 }

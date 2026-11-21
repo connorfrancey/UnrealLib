@@ -88,15 +88,16 @@ namespace UnrealLib
         friend bool operator==(const StructValue&, const StructValue&) = default;
     };
 
-    /// @brief A dynamic array value.
+    /// @brief A dynamic or fixed array value.
     ///
     /// When the element type is known, `elements` holds one value per element. Otherwise `raw` holds the bytes after
     /// the element count and `elements` is empty.
     struct ArrayValue
     {
-        std::int32_t count = 0;                 ///< Element count as serialized.
+        std::int32_t count = 0;                 ///< Element count, serialized for dynamic arrays.
         std::vector<PropertyValue> elements;    ///< Decoded elements (empty when undecoded).
         std::optional<std::vector<std::byte>> raw; ///< Undecoded element bytes.
+        bool fixed_size = false;               ///< The count comes from the declaration and is omitted on disk.
         /// @brief Whether the elements were decoded.
         [[nodiscard]] bool decoded() const noexcept { return !raw.has_value(); }
         /// @brief Memberwise comparison.
@@ -260,14 +261,14 @@ namespace UnrealLib
                                                      const TypeDesc* type = nullptr);
 
     /// @brief Parses text into a value of type @p type (see the template overload).
-    /// @throws Error (InvalidData) as the template overload; UnsupportedError for Map, FixedArray, Pointer and
+    /// @throws Error (InvalidData) as the template overload; UnsupportedError for Map, Pointer and
     ///         Unknown types.
     [[nodiscard]] PropertyValue parse_property_value(std::string_view text, const TypeDesc& type,
                                                      const PropertyParseOptions& options);
 
     /// @brief The default value of @p type (zero, False, None, empty string/array; binary structs get every
     ///        field of their layout, tagged structs no fields).
-    /// @throws UnsupportedError for Map, FixedArray, Pointer and Unknown types.
+    /// @throws UnsupportedError for Map, Pointer and Unknown types.
     [[nodiscard]] PropertyValue default_property_value(const TypeDesc& type, const PropertyParseOptions& options);
 
     /// @brief A property tag for a new property or tagged struct field of type @p type (size is recomputed when

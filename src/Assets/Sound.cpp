@@ -1,6 +1,7 @@
 #include <UnrealLib/Assets/Sound.hpp>
 
 #include <cstring>
+#include <limits>
 
 #include <fmt/format.h>
 
@@ -9,6 +10,44 @@
 
 namespace UnrealLib::Assets
 {
+    namespace
+    {
+        std::vector<std::int32_t> read_channel_table(BinaryReader& reader)
+        {
+            const auto count = reader.read_array_count(sizeof(std::int32_t));
+            std::vector<std::int32_t> values;
+            values.reserve(count);
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                values.push_back(reader.read_i32());
+            }
+            return values;
+        }
+
+        BulkData read_lazy_sound_data(BinaryReader& reader)
+        {
+            const auto version = reader.context().file_version;
+            const auto end_offset = reader.read_i32();
+            BulkData data;
+            if (version >= 254) (void)reader.read_i32(); // StorageSizeAddedToLazyArray
+            if (version >= 251) data.flags = reader.read_u32();
+            if (version >= 260) (void)read_fname(reader); // Storage package name
+            data.element_count = reader.read_index();
+            const auto start = reader.absolute_position();
+            if (data.element_count < 0 || end_offset < 0 ||
+                (end_offset != 0 && static_cast<std::uint64_t>(end_offset) < start) ||
+                start > static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))
+            {
+                throw SerializationError("invalid SoundNodeWave lazy array", start);
+            }
+            data.payload_offset = start;
+            data.offset_in_file = static_cast<std::int32_t>(start);
+            data.size_on_disk = end_offset == 0 ? data.element_count : end_offset - data.offset_in_file;
+            reader.skip(static_cast<std::size_t>(data.size_on_disk));
+            return data;
+        }
+    }
+
     std::string_view file_extension(AudioContainer container) noexcept
     {
         switch (container)
@@ -67,7 +106,7 @@ namespace UnrealLib::Assets
         BinaryReader reader = source.native_reader();
         const std::uint16_t version = reader.context().file_version;
         // Upstream USoundNodeWave.Deserialize gates (PackageObjectLegacyVersion).
-        if (version < 380)
+        if (version < 249)
         {
             throw UnsupportedError(fmt::format("SoundNodeWave layout of file version {} is not supported", version));
         }
@@ -79,14 +118,21 @@ namespace UnrealLib::Assets
         sound.channels = p.get_int("NumChannels").value_or(0);
         sound.spoken_text = p.get_string("SpokenText").value_or("");
 
-        if (version >= 385 && version < 420) // AddedChannelsSoundInfo .. DisplacedSoundChannelProperties
+        if (version < 380) // AddedPCSoundData
         {
-            throw UnsupportedError("SoundNodeWave channel tables (versions 385-419) are not supported");
+            sound.file_type = read_fname(reader);
         }
-        sound.raw_data = read_bulk_data(reader);
-        sound.compressed_pc = read_bulk_data(reader);
-        sound.compressed_xbox360 = read_bulk_data(reader);
-        sound.compressed_ps3 = read_bulk_data(reader);
+        const bool native_channels = version >= 385 && version < 420;
+        if (native_channels)
+        {
+            sound.channel_offsets = read_channel_table(reader);
+            sound.channel_sizes = read_channel_table(reader);
+        }
+        sound.raw_data = version < 266 ? read_lazy_sound_data(reader) : read_bulk_data(reader);
+        if (native_channels && version >= 390) sound.channels = reader.read_i32(); // AddedChannelCountSoundInfo
+        if (version >= 380) sound.compressed_pc = read_bulk_data(reader);          // AddedPCSoundData
+        if (version >= 327) sound.compressed_xbox360 = read_bulk_data(reader);     // AddedXenonSoundData
+        if (version >= 376) sound.compressed_ps3 = read_bulk_data(reader);         // AddedPS3SoundData
         if (version >= 845) sound.compressed_wiiu = read_bulk_data(reader);   // AddedWiiUSoundData
         if (version >= 851) sound.compressed_iphone = read_bulk_data(reader); // AddedIPhoneSoundData
         if (version >= 854) sound.compressed_flash = read_bulk_data(reader);  // AddedFlashSoundData

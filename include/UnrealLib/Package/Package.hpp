@@ -38,6 +38,36 @@ namespace UnrealLib
         bool read_depends = true;
     };
 
+    /// @brief An editor thumbnail table entry.
+    struct ThumbnailEntry
+    {
+        FString class_name;
+        FString object_path;
+        std::int32_t data_offset = 0;
+    };
+
+    /// @brief Thumbnail dimensions and encoded image bytes borrowed from the package.
+    struct ThumbnailImage
+    {
+        std::int32_t width;
+        std::int32_t height;
+        std::span<const std::byte> encoded;
+    };
+
+    /// @brief Imported object GUIDs grouped by level.
+    struct ImportGuidEntry
+    {
+        FString level_name;
+        std::vector<Guid> object_guids;
+    };
+
+    /// @brief A GUID and its serialized package index.
+    struct ExportGuidEntry
+    {
+        Guid guid;
+        ObjectIndex object;
+    };
+
     /// @brief A loaded Unreal package (header-level view).
     ///
     /// Loading performs, in order: summary parsing, profile selection, decompression of compressed chunks, and
@@ -93,6 +123,12 @@ namespace UnrealLib
 
         /// @brief The depends table (one list of object indices per export; empty if absent or not read).
         [[nodiscard]] const std::vector<std::vector<ObjectIndex>>& depends() const;
+
+        [[nodiscard]] std::span<const ThumbnailEntry> thumbnails() const;
+        /// @brief Reads the thumbnail at the given table index. The image borrows from data().
+        [[nodiscard]] std::optional<ThumbnailImage> thumbnail_image(std::size_t index) const;
+        [[nodiscard]] std::span<const ImportGuidEntry> import_guids() const;
+        [[nodiscard]] std::span<const ExportGuidEntry> export_guids() const;
 
         /// @brief Size of the file on disk.
         [[nodiscard]] std::uint64_t file_size() const;
@@ -158,6 +194,9 @@ namespace UnrealLib
         std::vector<ImportEntry> m_imports;
         std::vector<ExportEntry> m_exports;
         std::vector<std::vector<ObjectIndex>> m_depends;
+        std::vector<ThumbnailEntry> m_thumbnails;
+        std::vector<ImportGuidEntry> m_import_guids;
+        std::vector<ExportGuidEntry> m_export_guids;
         Diagnostics m_diagnostics;
     };
 }

@@ -3,12 +3,14 @@
 #include <algorithm>
 #include <charconv>
 #include <fstream>
+#include <limits>
 
 #include <fmt/format.h>
 
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Names/FName.hpp>
 #include <UnrealLib/Package/CompressedChunk.hpp>
+#include <UnrealLib/Serialization/BinaryReader.hpp>
 #include <UnrealLib/Serialization/BinaryWriter.hpp>
 #include <UnrealLib/Serialization/LegacyVersion.hpp>
 #include <UnrealLib/Utilities/Text.hpp>
@@ -58,8 +60,9 @@ namespace UnrealLib
         {
             if (e.serial_size > 0) first_data = std::min(first_data, static_cast<std::size_t>(e.serial_offset));
         }
-        if (tail_start > 0 && tail_start < first_data && first_data <= data.size())
+        if (tail_start > 0 && tail_start <= first_data && first_data <= data.size())
         {
+            m.header_tail_offset = tail_start;
             m.header_tail.assign(data.begin() + static_cast<std::ptrdiff_t>(tail_start),
                                  data.begin() + static_cast<std::ptrdiff_t>(first_data));
         }
@@ -228,6 +231,71 @@ namespace UnrealLib
 
     namespace
     {
+        std::size_t header_tail_index(const PackageModel& model, std::int32_t offset, std::size_t size)
+        {
+            if (offset > 0 && model.header_tail_offset > 0)
+            {
+                const auto absolute = static_cast<std::size_t>(offset);
+                if (absolute >= model.header_tail_offset)
+                {
+                    const auto index = absolute - model.header_tail_offset;
+                    if (index <= model.header_tail.size() && size <= model.header_tail.size() - index)
+                    {
+                        return index;
+                    }
+                }
+            }
+            throw UnsupportedError("UE3 thumbnail or GUID data lies outside the preserved package header");
+        }
+
+        std::int32_t relocated_offset(std::size_t start, std::size_t index)
+        {
+            constexpr auto max_offset = static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+            if (start > max_offset || index > max_offset - start)
+            {
+                throw Error(ErrorCode::LimitExceeded, "UE3 package header offset exceeds the signed 32-bit range");
+            }
+            return static_cast<std::int32_t>(start + index);
+        }
+
+        struct HeaderTableOffsets
+        {
+            std::optional<std::size_t> guid_table;
+            std::optional<std::size_t> thumbnail_table;
+            // Position of the serialized image pointer and the image's position, both relative to header_tail.
+            std::vector<std::pair<std::size_t, std::size_t>> thumbnail_images;
+        };
+
+        HeaderTableOffsets read_header_table_offsets(const PackageModel& model, const SerializationContext& ctx)
+        {
+            HeaderTableOffsets offsets;
+            if (ctx.at_least(LegacyVersion::AddedImportExportGuidsTable) && model.summary.import_export_guids_offset != 0)
+            {
+                const bool has_entries = model.summary.import_guids_count != 0 || model.summary.export_guids_count != 0;
+                offsets.guid_table = header_tail_index(model, model.summary.import_export_guids_offset,
+                                                       has_entries ? 8 : 0);
+            }
+            if (ctx.at_least(LegacyVersion::AddedThumbnailTable) && model.summary.thumbnail_table_offset != 0)
+            {
+                offsets.thumbnail_table = header_tail_index(model, model.summary.thumbnail_table_offset, 4);
+                BinaryReader table(model.header_tail, ctx, model.header_tail_offset);
+                table.seek(*offsets.thumbnail_table);
+                const auto count = table.read_array_count(12);
+                for (std::uint32_t i = 0; i < count; ++i)
+                {
+                    (void)table.read_fstring();
+                    (void)table.read_fstring();
+                    const auto pointer = table.position();
+                    const auto image = table.read_i32();
+                    if (image != 0)
+                    {
+                        offsets.thumbnail_images.emplace_back(pointer, header_tail_index(model, image, 12));
+                    }
+                }
+            }
+            return offsets;
+        }
+
         /// Compresses @p body into UE3 compressed chunks; returns the chunk records (compressed offsets relative to
         /// the start of @p out, which receives the chunk data).
         std::vector<CompressedChunkInfo> compress_body(std::span<const std::byte> body, std::size_t body_offset,
@@ -287,6 +355,7 @@ namespace UnrealLib
 
         PackageSummary summary = model.summary;
         const SerializationContext ctx = summary.context();
+        const HeaderTableOffsets header_tables = read_header_table_offsets(model, ctx);
         const std::int32_t old_names = summary.name_count;
         const std::int32_t old_exports = summary.export_count;
         summary.name_count = static_cast<std::int32_t>(model.names.size());
@@ -322,7 +391,20 @@ namespace UnrealLib
                     for (const ObjectIndex d : list) w.write_i32(d.value);
                 }
             }
+            const auto tail_start = w.position();
+            if (header_tables.guid_table)
+            {
+                summary.import_export_guids_offset = relocated_offset(tail_start, *header_tables.guid_table);
+            }
+            if (header_tables.thumbnail_table)
+            {
+                summary.thumbnail_table_offset = relocated_offset(tail_start, *header_tables.thumbnail_table);
+            }
             w.write_bytes(model.header_tail);
+            for (const auto& [pointer, image] : header_tables.thumbnail_images)
+            {
+                w.patch_i32(tail_start + pointer, relocated_offset(tail_start, image));
+            }
             summary.header_size = static_cast<std::int32_t>(w.position());
             for (std::size_t i = 0; i < exports.size(); ++i)
             {

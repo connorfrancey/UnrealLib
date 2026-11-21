@@ -227,4 +227,19 @@ namespace UnrealLib::Assets
         m.unparsed_offset = r.position();
         return m;
     }
+
+    ModelComponent read_model_component(Linker& linker, ObjectRef object, const PropertySchema* schema)
+    {
+        const AssetSource source = open_asset(linker, object, schema);
+        require_class(linker, object, source, "ModelComponent");
+        BinaryReader r = source.native_reader();
+        if (r.context().file_version != 536)
+        {
+            throw UnsupportedError(fmt::format("ModelComponent layout of file version {} is not supported",
+                                               r.context().file_version));
+        }
+        const ObjectIndex model{r.read_index()};
+        const auto zone_index = r.read_i32();
+        return {model, zone_index, r.position()};
+    }
 }

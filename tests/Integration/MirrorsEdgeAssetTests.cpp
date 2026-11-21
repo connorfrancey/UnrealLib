@@ -19,6 +19,7 @@
 
 #include <UnrealLib/Assets/Animation.hpp>
 #include <UnrealLib/Assets/Brush.hpp>
+#include <UnrealLib/Assets/Font.hpp>
 #include <UnrealLib/Assets/Image.hpp>
 #include <UnrealLib/Assets/Material.hpp>
 #include <UnrealLib/Assets/SkeletalMesh.hpp>
@@ -87,7 +88,8 @@ namespace
         return b.describe_flags() + (b.element_count == 0 ? " (empty)" : "");
     }
 
-    void check_assets(Linker& linker, const Package& package, AssetTally& tally, bool brushes_only = false)
+    void check_assets(Linker& linker, const Package& package, AssetTally& tally, bool brushes_only = false,
+                      std::string_view class_filter = {})
     {
         const std::string dump = env("UNREALLIB_ASSET_DUMP");
         for (std::size_t i = 0; i < package.exports().size(); ++i)
@@ -99,7 +101,8 @@ namespace
                 continue;
             }
             const std::string cls = package.class_name(ref.index);
-            if (brushes_only && cls != "Polys" && cls != "Model") continue;
+            if (!class_filter.empty() && !Text::iequals(cls, class_filter)) continue;
+            if (brushes_only && cls != "Polys" && cls != "Model" && cls != "ModelComponent") continue;
             try
             {
                 if (is_texture2d_class(cls))
@@ -342,10 +345,44 @@ namespace
                         }
                     }
                 }
+                else if (cls == "ModelComponent")
+                {
+                    const ModelComponent component = read_model_component(linker, ref);
+                    ++tally.read[cls];
+                    if (component.model.is_null() || !package.is_valid(component.model) ||
+                        package.class_name(component.model) != "Model")
+                    {
+                        tally.fail(cls, linker.qualified_path(ref), "Model reference is not a Model");
+                    }
+                }
                 else if (cls == "TextureCube")
                 {
                     (void)read_texture_cube(linker, ref);
                     ++tally.read[cls];
+                }
+                else if (cls == "TextureMovie")
+                {
+                    const auto movie = read_texture_movie(linker, ref);
+                    if (movie.raw_data.is_inline() && movie.raw_data.has_payload())
+                    {
+                        (void)load_bulk_data(package, movie.raw_data);
+                    }
+                    ++tally.read[cls];
+                }
+                else if (cls == "Texture3D")
+                {
+                    (void)read_texture3d(linker, ref);
+                    ++tally.read[cls];
+                }
+                else if (cls == "Font" || cls == "MultiFont")
+                {
+                    const Font font = read_font(linker, ref);
+                    ++tally.read[cls];
+                    const auto& offsets = font.kerning_resolution_offsets;
+                    if (!offsets.empty() && (!std::ranges::is_sorted(offsets) || offsets.back() > font.kerning_pairs.size()))
+                    {
+                        tally.fail(cls, linker.qualified_path(ref), "invalid kerning resolution offsets");
+                    }
                 }
                 else if (cls == "SoundNodeWave")
                 {
@@ -445,15 +482,20 @@ TEST(MirrorsEdgeAssetTests, FullCorpusAssets)
     {
         GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_FIXTURE_SWEEP=1";
     }
+    const std::string class_filter = env("UNREALLIB_ASSET_CLASS");
     AssetTally tally;
     for (const auto& file : packages(true))
     {
         Linker linker;
         linker.add_search_path(fixture_dir());
-        check_assets(linker, linker.load(file), tally);
+        check_assets(linker, linker.load(file), tally, false, class_filter);
     }
     report(tally);
     EXPECT_EQ(tally.total_failures, 0u);
+    if (!class_filter.empty())
+    {
+        EXPECT_FALSE(tally.read.empty()) << "no assets read for " << class_filter;
+    }
 }
 
 
@@ -515,8 +557,7 @@ TEST(MirrorsEdgeAssetTests, FullCorpusMaterials)
 
 TEST(MirrorsEdgeAssetTests, FullCorpusBrushes)
 {
-    // Every Model and Polys export of the game (brush geometry). Loading every package takes minutes in Debug, so it
-    // runs with the fixture sweep.
+    // Brush geometry and BSP component links. Loading every package runs with the fixture sweep.
     if (!fixtures_available() || env("UNREALLIB_FIXTURE_SWEEP") != "1")
     {
         GTEST_SKIP() << "needs UNREALLIB_MIRRORSEDGE_DIR and UNREALLIB_FIXTURE_SWEEP=1";
@@ -534,5 +575,6 @@ TEST(MirrorsEdgeAssetTests, FullCorpusBrushes)
               << ", models with Polys: " << tally.models_with_polys << std::endl;
     EXPECT_GT(tally.read["Model"], 0u);
     EXPECT_GT(tally.read["Polys"], 0u);
+    EXPECT_GT(tally.read["ModelComponent"], 0u);
     EXPECT_EQ(tally.total_failures, 0u);
 }

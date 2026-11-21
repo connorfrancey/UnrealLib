@@ -85,6 +85,14 @@ namespace
                 array.inner = std::make_shared<TypeDesc>(type_of(PropertyType::Int));
                 return array;
             }
+            if (owner == "TestClass" && property == "FixedNumbers")
+            {
+                TypeDesc array;
+                array.type = PropertyType::FixedArray;
+                array.inner = std::make_shared<TypeDesc>(type_of(PropertyType::Int));
+                array.fixed_count = 2;
+                return array;
+            }
             return std::nullopt;
         }
         StructLayout pair{"Pair", true, {{"A", type_of(PropertyType::Int), 1}, {"B", type_of(PropertyType::Byte), 2}}};
@@ -275,6 +283,50 @@ TEST(PropertyValueTests, ArraysUseSchemaOrStayRaw)
     const auto untyped = parse(b);
     EXPECT_FALSE(std::get<ArrayValue>(untyped[0].value.value).decoded());
     EXPECT_EQ(rewrite(b, untyped), original(b));
+}
+
+TEST(PropertyValueTests, FixedArrayUsesDeclaredCountAndPreservesUnknownData)
+{
+    Builder b;
+    b.tag("FixedNumbers", "FixedArrayProperty", 8);
+    b.writer.write_i32(10);
+    b.writer.write_i32(20);
+    b.tag("FixedNumbers", "FixedArrayProperty", 4, 1);
+    b.writer.write_i32(30); // Truncated second array.
+    b.none();
+
+    TestSchema schema;
+    const auto props = parse(b, &schema);
+    ASSERT_EQ(props.size(), 2u);
+    const auto& fixed = std::get<ArrayValue>(props[0].value.value);
+    EXPECT_TRUE(fixed.fixed_size);
+    ASSERT_EQ(fixed.elements.size(), 2u);
+    EXPECT_EQ(std::get<std::int32_t>(fixed.elements[0].value), 10);
+    EXPECT_EQ(std::get<std::int32_t>(fixed.elements[1].value), 20);
+    EXPECT_TRUE(std::holds_alternative<RawValue>(props[1].value.value));
+    EXPECT_EQ(rewrite(b, props), original(b));
+
+    const auto untyped = parse(b);
+    EXPECT_TRUE(std::holds_alternative<RawValue>(untyped[0].value.value));
+    EXPECT_EQ(rewrite(b, untyped), original(b));
+
+    const auto type = schema.find_property("TestClass", "FixedNumbers");
+    ASSERT_TRUE(type);
+    PropertyParseOptions options;
+    options.make_name = [&](std::string_view name) { return b.name(name); };
+    const auto edited = parse_property_value("(56,78)", *type, options);
+    PropertyFormatOptions format;
+    format.names = &b.names;
+    EXPECT_EQ(format_property_value(edited, format), "(56,78)");
+    EXPECT_EQ(parse_property_value("(56,78)", props[0].value, options), edited);
+    EXPECT_THROW((void)parse_property_value("(56)", props[0].value, options), Error);
+
+    BinaryWriter payload(ctx());
+    write_property_value(payload, edited, b.name("None"));
+    ASSERT_EQ(payload.size(), 8u);
+    BinaryReader reader(payload.data(), ctx());
+    EXPECT_EQ(reader.read_i32(), 56);
+    EXPECT_EQ(reader.read_i32(), 78);
 }
 
 TEST(PropertyValueTests, ArrayOfTaggedStructsIsDetectedWithoutSchema)

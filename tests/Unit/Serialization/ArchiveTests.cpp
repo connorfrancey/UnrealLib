@@ -70,8 +70,9 @@ TEST(ArchiveTests, FileArchiveMissingFileThrowsIoError)
 
 TEST(ArchiveTests, ReadFileEnforcesLimit)
 {
-    const TempFile file(bytes_of({1, 2, 3, 4, 5, 6, 7, 8}));
-    EXPECT_EQ(read_file(file.path(), 8).size(), 8u);
+    const auto bytes = bytes_of({1, 2, 3, 4, 5, 6, 7, 8});
+    const TempFile file(bytes);
+    EXPECT_EQ(read_file(file.path(), 8), bytes);
     try
     {
         (void)read_file(file.path(), 7);

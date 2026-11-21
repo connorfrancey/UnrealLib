@@ -553,7 +553,7 @@ namespace UnrealLib::Decompiler
                 out += pad + "// " + name + "=" + format_property_value(p.value, format) + "\n";
                 continue;
             }
-            if (const auto* array = std::get_if<ArrayValue>(&p.value.value))
+            if (const auto* array = std::get_if<ArrayValue>(&p.value.value); array && !array->fixed_size)
             {
                 if (array->elements.empty())
                 {

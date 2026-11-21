@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -444,6 +445,11 @@ namespace UnrealLib::Assets
             texture.flash_mip_data = read_bulk_data(reader);
         }
         if (version >= 864) texture.etc_mips = read_mips(reader); // AddedETCToUTexture2D
+        if (object.package->profile().assets.lightmap_texture_trailing_word &&
+            Text::iequals(source.class_name, "LightMapTexture2D"))
+        {
+            texture.lightmap_trailing_word = reader.read_u32();
+        }
         expect_end(reader, linker.qualified_path(object));
         texture.properties = source.properties;
         return texture;
@@ -526,5 +532,58 @@ namespace UnrealLib::Assets
         expect_end(reader, linker.qualified_path(object));
         cube.properties = source.properties;
         return cube;
+    }
+
+    namespace
+    {
+        BinaryReader open_texture_bulk_data(const AssetSource& source, std::string_view expected_class)
+        {
+            if (!Text::iequals(source.class_name, expected_class))
+            {
+                throw Error(ErrorCode::InvalidArgument,
+                            fmt::format("expected {}, found {}", expected_class, source.class_name));
+            }
+            BinaryReader reader = source.native_reader();
+            if (reader.context().file_version < 266) // LazyArrayReplacedWithBulkData (upstream)
+            {
+                throw UnsupportedError(fmt::format("{} requires the bulk-data layout introduced in version 266",
+                                                  expected_class));
+            }
+            return reader;
+        }
+    }
+
+    TextureMovie read_texture_movie(Linker& linker, ObjectRef object, const PropertySchema* schema)
+    {
+        AssetSource source = open_asset(linker, object, schema);
+        BinaryReader reader = open_texture_bulk_data(source, "TextureMovie");
+        TextureMovie movie;
+        movie.source_art = read_bulk_data(reader);
+        movie.raw_data = read_bulk_data(reader);
+        expect_end(reader, linker.qualified_path(object));
+        movie.properties = std::move(source.properties);
+        return movie;
+    }
+
+    Texture3D read_texture3d(Linker& linker, ObjectRef object, const PropertySchema* schema)
+    {
+        AssetSource source = open_asset(linker, object, schema);
+        BinaryReader reader = open_texture_bulk_data(source, "Texture3D");
+        Texture3D texture;
+        texture.source_art = read_bulk_data(reader);
+        texture.size_x = reader.read_u32();
+        texture.size_y = reader.read_u32();
+        texture.format = reader.read_i32();
+        texture.mips.resize(reader.read_array_count(28));
+        for (TextureMip3D& mip : texture.mips)
+        {
+            mip.data = read_bulk_data(reader);
+            mip.size_x = reader.read_u32();
+            mip.size_y = reader.read_u32();
+            mip.size_z = reader.read_u32();
+        }
+        expect_end(reader, linker.qualified_path(object));
+        texture.properties = std::move(source.properties);
+        return texture;
     }
 }

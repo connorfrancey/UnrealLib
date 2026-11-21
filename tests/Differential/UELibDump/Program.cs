@@ -12,11 +12,19 @@
 //   name references: [index, number] where number is the on-disk value (upstream's UName.Number + 1)
 //   object references: raw int32 package index
 //   object flags: raw on-disk uint64 (upstream swaps the 32-bit halves; undone here)
+//
+// Benchmark mode: UELibDump --bench <output.json> <directory> [--iterations N]
+// Times upstream on the packages it reads completely (uncompressed; see Bench) for the speed comparison in
+// tests/Differential/DifferentialTests.cpp (SpeedComparison).
 
+using System.Diagnostics;
+using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using UELib;
 using UELib.Core;
+using UELib.Services;
 using UELib.Types;
 
 namespace UnrealLib.Differential;
@@ -27,6 +35,11 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--bench")
+        {
+            return Bench(args);
+        }
+
         bool recursive = args.Contains("--recursive");
         string[] positional = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
         if (positional.Length < 2)
@@ -80,6 +93,158 @@ internal static class Program
             else
             {
                 yield return (input, Path.GetFileName(input));
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Benchmark mode
+    //
+    // Workloads (the same work the dump above does, which the differential tests verify UnrealLib reproduces):
+    //   load:    UnrealLoader.LoadPackage (summary, name/import/export/depends tables), for every uncompressed package
+    //            (upstream stops after the summary for compressed ones, so they would not be comparable);
+    //   objects: LoadPackage + InitializePackage(All) + Load of every remaining export (property tags, reflection data
+    //            and bytecode tokens), for every uncompressed script package (.u).
+    // One warm-up pass over all packages (JIT and tiered compilation), then per package the minimum of N runs, each
+    // after a full GC so that garbage from earlier runs is not collected inside a timed run.
+    //
+    // Output: { "runtime", "iterations", "load": { "<relative path>": ms }, "objects": { ... } }
+    // ---------------------------------------------------------------------------------------------------------------
+
+    private static int Bench(string[] args)
+    {
+        int iterations = 5;
+        var positional = new List<string>();
+        for (int i = 1; i < args.Length; ++i)
+        {
+            if (args[i] == "--iterations" && i + 1 < args.Length)
+            {
+                iterations = Math.Max(1, int.Parse(args[++i], CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                positional.Add(args[i]);
+            }
+        }
+        if (positional.Count != 2)
+        {
+            Console.Error.WriteLine("usage: UELibDump --bench <output.json> <directory> [--iterations N]");
+            return 3;
+        }
+
+        TextWriter originalOut = Console.Out;
+        Console.SetOut(TextWriter.Null);
+        // Upstream reports trailing data and swallowed exceptions on stderr; UnrealLib's logging is quiet by default,
+        // so neither side spends timed work on console output.
+        LibServices.LogService = new NullLogService();
+
+        var load = new List<(string File, string Relative)>();
+        var objects = new List<(string File, string Relative)>();
+        foreach (var (file, relative) in Collect([positional[1]], false))
+        {
+            try
+            {
+                using UnrealPackage package = UnrealLoader.LoadPackage(file);
+                var s = package.Summary;
+                if (s.CompressedChunks != null && s.CompressedChunks.Count != 0 && s.CompressionFlags != 0)
+                {
+                    continue;
+                }
+                load.Add((file, relative));
+                if (Path.GetExtension(file).Equals(".u", StringComparison.OrdinalIgnoreCase))
+                {
+                    objects.Add((file, relative));
+                }
+            }
+            catch (Exception)
+            {
+                // Not loadable by upstream: nothing to compare.
+            }
+        }
+
+        var loadTimes = Measure(load, iterations, LoadOnly);
+        var objectTimes = Measure(objects, iterations, LoadObjects);
+
+        using (var stream = File.Create(positional[0]))
+        using (var w = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+        {
+            w.WriteStartObject();
+            w.WriteString("runtime", RuntimeInformation.FrameworkDescription);
+            w.WriteNumber("iterations", iterations);
+            foreach (var (name, times) in new[] { ("load", loadTimes), ("objects", objectTimes) })
+            {
+                w.WriteStartObject(name);
+                foreach (var (relative, ms) in times)
+                {
+                    w.WriteNumber(relative, ms);
+                }
+                w.WriteEndObject();
+            }
+            w.WriteEndObject();
+        }
+
+        Console.SetOut(originalOut);
+        Console.WriteLine($"UELibDump: benchmarked {load.Count} packages (load) and {objects.Count} script packages " +
+                          $"(objects), {iterations} runs each");
+        return 0;
+    }
+
+    private static List<(string Relative, double Milliseconds)> Measure(List<(string File, string Relative)> packages,
+                                                                      int iterations, Action<string> work)
+    {
+        foreach (var (file, _) in packages)
+        {
+            work(file); // warm-up
+        }
+        var results = new List<(string, double)>();
+        foreach (var (file, relative) in packages)
+        {
+            double best = double.MaxValue;
+            for (int i = 0; i < iterations; ++i)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                long start = Stopwatch.GetTimestamp();
+                work(file);
+                best = Math.Min(best, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            }
+            results.Add((relative, best));
+        }
+        return results;
+    }
+
+    private sealed class NullLogService : ILogService
+    {
+        public void Log(string text) { }
+        public void Log(string format, params object?[] arg) { }
+        public void SilentException(Exception exception) { }
+        public void SilentAssert(bool assert, string message) { }
+    }
+
+    private static void LoadOnly(string file)
+    {
+        using UnrealPackage package = UnrealLoader.LoadPackage(file);
+    }
+
+    private static void LoadObjects(string file)
+    {
+        using UnrealPackage package = UnrealLoader.LoadPackage(file);
+        package.InitializePackage(UnrealPackage.InitFlags.All);
+        foreach (var export in package.Exports)
+        {
+            UObject? obj = export.Object;
+            if (obj == null || obj.DeserializationState != 0)
+            {
+                continue;
+            }
+            try
+            {
+                obj.Load();
+            }
+            catch (Exception)
+            {
+                // Same as the dump: failures are part of the work, not of the result.
             }
         }
     }

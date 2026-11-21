@@ -39,11 +39,31 @@ namespace
         std::size_t raw_values = 0;
         std::size_t raw_arrays = 0;
         std::size_t decoded_arrays = 0;
+        std::size_t map_tags = 0;
+        std::string first_nonempty_map;
         std::map<std::string, std::size_t> raw_by_kind;
         std::map<std::string, std::size_t> raw_arrays_by_property; ///< "<class>.<property>[.<field>…]"
     };
 
-    void count_arrays(const PropertyValue& value, PropertyTally& tally, const std::string& where)
+    void count_values(const PropertyValue& value, PropertyTally& tally, const std::string& where,
+                      const ObjectRef& ref, const Linker& linker);
+
+    void count_property(const Property& property, PropertyTally& tally, const std::string& where,
+                        const ObjectRef& ref, const Linker& linker)
+    {
+        if (property.tag && property.tag->type == PropertyType::Map)
+        {
+            ++tally.map_tags;
+            if (property.tag->size > 0 && tally.first_nonempty_map.empty())
+            {
+                tally.first_nonempty_map = linker.qualified_path(ref) + " (" + where + ")";
+            }
+        }
+        count_values(property.value, tally, where, ref, linker);
+    }
+
+    void count_values(const PropertyValue& value, PropertyTally& tally, const std::string& where,
+                      const ObjectRef& ref, const Linker& linker)
     {
         if (const auto* array = std::get_if<ArrayValue>(&value.value))
         {
@@ -56,11 +76,11 @@ namespace
                 ++tally.raw_arrays;
                 ++tally.raw_arrays_by_property[where];
             }
-            for (const auto& element : array->elements) count_arrays(element, tally, where);
+            for (const auto& element : array->elements) count_values(element, tally, where, ref, linker);
         }
         else if (const auto* s = std::get_if<StructValue>(&value.value))
         {
-            for (const auto& field : s->fields) count_arrays(field.value, tally, where + "." + field.name);
+            for (const auto& field : s->fields) count_property(field, tally, where + "." + field.name, ref, linker);
         }
     }
 
@@ -90,7 +110,7 @@ namespace
                     ++tally.raw_by_kind[key];
                 }
                 const std::string owner = package.class_name(ref.index);
-                for (const auto& p : result.properties) count_arrays(p.value, tally, owner + "." + p.name);
+                for (const auto& p : result.properties) count_property(p, tally, owner + "." + p.name, ref, linker);
 
                 // Lossless round trip of the property block.
                 BinaryWriter writer(package.context());
@@ -123,6 +143,11 @@ namespace
                   << ", failures: " << tally.failures << ", round-trip failures: " << tally.round_trip_failures
                   << "\n  raw values: " << tally.raw_values << ", arrays decoded/raw: " << tally.decoded_arrays << "/"
                   << tally.raw_arrays << '\n';
+        std::cout << "  MapProperty tags: " << tally.map_tags << '\n';
+        if (!tally.first_nonempty_map.empty())
+        {
+            std::cout << "  first map tag with a payload: " << tally.first_nonempty_map << '\n';
+        }
         std::vector<std::pair<std::size_t, std::string>> top;
         for (const auto& [key, count] : tally.raw_by_kind) top.emplace_back(count, key);
         std::sort(top.rbegin(), top.rend());
@@ -142,6 +167,7 @@ namespace
         ::testing::Test::RecordProperty("properties", static_cast<int>(tally.properties));
         ::testing::Test::RecordProperty("raw_values", static_cast<int>(tally.raw_values));
         ::testing::Test::RecordProperty("raw_arrays", static_cast<int>(tally.raw_arrays));
+        ::testing::Test::RecordProperty("map_tags", static_cast<int>(tally.map_tags));
     }
 }
 

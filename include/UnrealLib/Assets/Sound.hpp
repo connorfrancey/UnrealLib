@@ -32,7 +32,7 @@ namespace UnrealLib::Assets
 
     /// @brief A SoundNodeWave export.
     ///
-    /// Native layout (file versions 380..844, verified on every Mirror's Edge sound): bulk data RawData,
+    /// Native layout (file versions 420..844, verified on Mirror's Edge sounds): bulk data RawData,
     /// CompressedPCData, CompressedXbox360Data, CompressedPS3Data.
     struct SoundWave
     {
@@ -48,6 +48,9 @@ namespace UnrealLib::Assets
         BulkData compressed_wiiu;          ///< Wii U cooked data (file version >= 845).
         BulkData compressed_iphone;        ///< iPhone cooked data (file version >= 851).
         BulkData compressed_flash;         ///< Flash cooked data (file version >= 854).
+        std::optional<FName> file_type;     ///< Native file type (file versions before 380).
+        std::vector<std::int32_t> channel_offsets; ///< Native channel offsets (385–419).
+        std::vector<std::int32_t> channel_sizes;   ///< Native channel sizes (385–419).
         AssetProperties properties;        ///< All tagged properties.
 
         /// @brief The record extract_sound() uses: RawData if present, else the PC, Xbox 360 or PS3 data.

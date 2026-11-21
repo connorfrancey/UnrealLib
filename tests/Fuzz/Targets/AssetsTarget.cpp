@@ -3,6 +3,7 @@
 
 #include <UnrealLib/Assets/Animation.hpp>
 #include <UnrealLib/Assets/Brush.hpp>
+#include <UnrealLib/Assets/Font.hpp>
 #include <UnrealLib/Assets/Material.hpp>
 #include <UnrealLib/Assets/SkeletalMesh.hpp>
 #include <UnrealLib/Assets/Sound.hpp>
@@ -43,6 +44,9 @@ UNREALLIB_FUZZ_TARGET(assets)
                 }
             }
             else if (cls == "TextureCube") (void)read_texture_cube(linker, ref);
+            else if (cls == "TextureMovie") (void)read_texture_movie(linker, ref);
+            else if (cls == "Texture3D") (void)read_texture3d(linker, ref);
+            else if (cls == "Font" || cls == "MultiFont") (void)read_font(linker, ref);
             else if (cls == "SoundNodeWave") (void)read_sound_wave(linker, ref);
             else if (cls == "StaticMesh") (void)read_static_mesh(linker, ref);
             else if (cls == "SkeletalMesh") (void)read_skeletal_mesh(linker, ref);
@@ -51,6 +55,7 @@ UNREALLIB_FUZZ_TARGET(assets)
             else if (cls == "Material" || cls == "MaterialInstanceConstant") (void)read_material(linker, ref);
             else if (cls == "Polys") (void)read_polys(linker, ref);
             else if (cls == "Model") (void)read_model(linker, ref);
+            else if (cls == "ModelComponent") (void)read_model_component(linker, ref);
         }
         catch (const Error&)
         {

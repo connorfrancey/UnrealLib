@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <UnrealLib/Core/Error.hpp>
+#include <UnrealLib/Names/NameTable.hpp>
 #include <UnrealLib/Objects/ObjectFlags.hpp>
 #include <UnrealLib/Objects/ObjectHeader.hpp>
+#include <UnrealLib/Reflection/Fields.hpp>
 #include <UnrealLib/Serialization/BinaryReader.hpp>
 #include <UnrealLib/Serialization/BinaryWriter.hpp>
 
@@ -69,6 +71,56 @@ TEST(ObjectHeaderTests, PlainObjectHasOnlyNetIndex)
     EXPECT_FALSE(header.component.has_value());
     EXPECT_EQ(header.net_index, std::optional<std::int32_t>(-1));
     EXPECT_EQ(header.properties_offset, 4u);
+}
+
+TEST(ReflectionTests, ReadsMetadataFieldPathsAndObjectReferences)
+{
+    NameTable names;
+    const FName none{names.add("None"), 0};
+    const FName tooltip{names.add("ToolTip"), 0};
+    FieldReadOptions options;
+    options.names = &names;
+    const auto kind = field_kind_of("MetaData");
+    ASSERT_EQ(kind, FieldKind::MetaData);
+
+    for (const auto version : {std::uint16_t{540}, std::uint16_t{541}})
+    {
+        BinaryWriter writer(ctx(version));
+        writer.write_i32(-1); // NetIndex
+        write_fname(writer, none);
+        writer.write_i32(1); // Field count
+        if (version == 540)
+        {
+            writer.write_fstring(FString{"Core.Object.X"});
+        }
+        else
+        {
+            writer.write_index(3);
+        }
+        writer.write_i32(1); // Tag count
+        write_fname(writer, tooltip);
+        writer.write_fstring(FString{"Field description"});
+
+        BinaryReader reader(writer.data(), ctx(version));
+        const auto object = read_field(reader, *kind, PropertyType::Unknown, {}, options);
+        ASSERT_EQ(object.metadata.size(), 1u);
+        const auto& entry = object.metadata.front();
+        if (version == 540)
+        {
+            EXPECT_EQ(std::get<FString>(entry.field).text, "Core.Object.X");
+        }
+        else
+        {
+            EXPECT_EQ(std::get<ObjectIndex>(entry.field), ObjectIndex{3});
+        }
+        ASSERT_EQ(entry.tags.size(), 1u);
+        EXPECT_EQ(entry.tags.front().first, tooltip);
+        EXPECT_EQ(entry.tags.front().second.text, "Field description");
+        EXPECT_EQ(object.end_offset, writer.size());
+
+        BinaryReader truncated(writer.data().first(writer.size() - 1), ctx(version));
+        EXPECT_THROW((void)read_field(truncated, *kind, PropertyType::Unknown, {}, options), SerializationError);
+    }
 }
 
 TEST(ObjectHeaderTests, NoNetIndexBeforeVersion322)

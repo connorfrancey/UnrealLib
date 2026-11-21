@@ -216,14 +216,98 @@ namespace UnrealLib
             }
         }
 
-        if (ctx.at_least(LegacyVersion::AddedThumbnailTable) && m_summary.thumbnail_table_offset > 0)
+        if (ctx.at_least(LegacyVersion::AddedThumbnailTable) && m_summary.thumbnail_table_offset != 0)
         {
-            m_diagnostics.info("thumbnails.not-parsed", "thumbnail table is present but not parsed");
+            try
+            {
+                reader.seek(static_cast<std::size_t>(m_summary.thumbnail_table_offset));
+                const auto count = reader.read_array_count(12);
+                std::vector<ThumbnailEntry> thumbnails;
+                thumbnails.reserve(count);
+                for (std::uint32_t i = 0; i < count; ++i)
+                {
+                    thumbnails.push_back({reader.read_fstring(), reader.read_fstring(), reader.read_i32()});
+                }
+                m_thumbnails = std::move(thumbnails);
+            }
+            catch (const SerializationError& e)
+            {
+                m_diagnostics.warning("thumbnails.unreadable", e.message(), e.offset());
+            }
         }
-        if (ctx.at_least(LegacyVersion::AddedImportExportGuidsTable) && m_summary.import_export_guids_offset > 0)
+        if (ctx.at_least(LegacyVersion::AddedImportExportGuidsTable) && m_summary.import_export_guids_offset != 0)
         {
-            m_diagnostics.info("guids.not-parsed", "import/export GUID table is present but not parsed");
+            try
+            {
+                const auto imports = checked_table(reader, m_summary.import_guids_count,
+                    m_summary.import_export_guids_offset, 8, "import GUID");
+                reader.seek(static_cast<std::size_t>(m_summary.import_export_guids_offset));
+                std::vector<ImportGuidEntry> import_guids;
+                import_guids.reserve(imports);
+                for (std::uint32_t i = 0; i < imports; ++i)
+                {
+                    ImportGuidEntry entry{reader.read_fstring(), {}};
+                    const auto count = reader.read_array_count(16);
+                    entry.object_guids.reserve(count);
+                    for (std::uint32_t j = 0; j < count; ++j)
+                    {
+                        entry.object_guids.push_back(reader.read_guid());
+                    }
+                    import_guids.push_back(std::move(entry));
+                }
+                const auto exports = checked_table(reader, m_summary.export_guids_count,
+                    static_cast<std::int32_t>(reader.position()), 20, "export GUID");
+                std::vector<ExportGuidEntry> export_guids;
+                export_guids.reserve(exports);
+                for (std::uint32_t i = 0; i < exports; ++i)
+                {
+                    export_guids.push_back({reader.read_guid(), ObjectIndex{reader.read_i32()}});
+                }
+                m_import_guids = std::move(import_guids);
+                m_export_guids = std::move(export_guids);
+            }
+            catch (const Error& e)
+            {
+                m_diagnostics.warning("guids.unreadable", e.message(), e.offset());
+            }
         }
+    }
+
+    std::span<const ThumbnailEntry> Package::thumbnails() const
+    {
+        require_loaded();
+        return m_thumbnails;
+    }
+
+    std::optional<ThumbnailImage> Package::thumbnail_image(std::size_t index) const
+    {
+        require_loaded();
+        if (index >= m_thumbnails.size())
+        {
+            throw PackageError(ErrorCode::OutOfBounds, "thumbnail index is outside the table");
+        }
+        const auto offset = m_thumbnails[index].data_offset;
+        if (offset == 0)
+        {
+            return std::nullopt;
+        }
+        auto image_reader = reader();
+        image_reader.seek(static_cast<std::size_t>(offset));
+        const auto width = image_reader.read_i32();
+        const auto height = image_reader.read_i32();
+        return ThumbnailImage{width, height, image_reader.read_view(image_reader.read_array_count())};
+    }
+
+    std::span<const ImportGuidEntry> Package::import_guids() const
+    {
+        require_loaded();
+        return m_import_guids;
+    }
+
+    std::span<const ExportGuidEntry> Package::export_guids() const
+    {
+        require_loaded();
+        return m_export_guids;
     }
 
     void Package::require_loaded() const

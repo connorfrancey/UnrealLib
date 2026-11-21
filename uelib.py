@@ -497,6 +497,145 @@ def do_docs(preset: Preset, open_browser: bool = False) -> None:
         webbrowser.open(index.as_uri())
 
 
+COMPARE_TESTS = r"ParityReport|SpeedComparison"  # CTest pulls in the UELibDump / UELibBench fixtures they require
+RELEASE_TYPES = ("Release", "RelWithDebInfo", "MinSizeRel")
+
+
+def cache_value(preset: Preset, key: str) -> str | None:
+    """A variable from the preset's CMakeCache.txt (None if not configured or not set)."""
+    cache = preset.binary_dir / "CMakeCache.txt"
+    if not cache.exists():
+        return None
+    match = re.search(rf"^{re.escape(key)}:[^=]*=(.*)$", cache.read_text(encoding="utf-8", errors="replace"),
+                      re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def compare_preset(name: str | None) -> Preset:
+    """PRESET if given; otherwise the default preset if it is a Release build, else msvc-x64-release (the speed
+    comparison only runs in Release builds)."""
+    if name is not None:
+        return get_preset(name)
+    presets = load_presets()
+    default = load_settings().get("default_preset")
+    if default in presets and presets[default].available and presets[default].build_type in RELEASE_TYPES:
+        return presets[default]
+    for candidate in ("msvc-x64-release", "msvc-x86-release"):
+        if candidate in presets and presets[candidate].available:
+            return presets[candidate]
+    return get_preset(None)
+
+
+def floor2(percent: float) -> float:
+    """Rounded down to two decimals, so that 100.00 is only shown when every item matches (as the C++ test does)."""
+    return int(percent * 100) / 100
+
+
+def print_parity_report(report: dict[str, Any]) -> None:
+    table = Table(title=f"Accuracy vs upstream UELib ({report['packages']} packages)")
+    table.add_column("Area")
+    table.add_column("Matched", justify="right")
+    table.add_column("Compared", justify="right")
+    table.add_column("Accuracy", justify="right")
+
+    def colored(percent: float) -> str:
+        shown = floor2(percent)
+        color = "green" if shown >= 100 else "yellow" if shown >= 99 else "red"
+        return f"[{color}]{shown:.2f}%[/]"
+
+    for area in report["areas"]:
+        table.add_row(area["area"], f"{area['matched']:,}", f"{area['compared']:,}", colored(area["percent"]))
+    table.add_section()
+    table.add_row("[bold]Overall[/] (areas weighted equally)", "", "", colored(report["overall_percent"]))
+    table.add_row("Overall (every compared item)", "", "", colored(report["overall_item_percent"]))
+    console.print(table)
+    beyond = report["beyond_upstream"]
+    console.print(f"[dim]Beyond upstream: UnrealLib reads {beyond['packages_read']} of "
+                  f"{beyond['packages_upstream_failed']} packages and the properties of {beyond['objects_read']} of "
+                  f"{beyond['objects_upstream_failed']} objects that upstream fails on.[/]")
+
+
+def print_speed_report(report: dict[str, Any], details: bool) -> None:
+    def speedup(value: float) -> str:
+        return f"[green]{value:.1f}x[/]" if value >= 1 else f"[red]{value:.2f}x[/]"
+
+    if details:
+        for workload in report["workloads"]:
+            table = Table(title=workload["label"])
+            for column in ("Package", "UELib (C#)", "UnrealLib", "Speedup"):
+                table.add_column(column, justify="left" if column == "Package" else "right")
+            for d in sorted(workload["details"], key=lambda d: d["speedup"]):
+                table.add_row(d["package"], f"{d['upstream_ms']:.2f} ms", f"{d['unreallib_ms']:.2f} ms",
+                              speedup(d["speedup"]))
+            console.print(table)
+
+    table = Table(title=f"Speed vs upstream UELib (C#, {report['runtime']}), "
+                        f"fastest of {report['iterations']} runs per package")
+    table.add_column("Workload")
+    for column in ("Packages", "UELib (C#)", "UnrealLib", "Speedup", "Geomean"):
+        table.add_column(column, justify="right")
+    for w in report["workloads"]:
+        table.add_row(w["label"], str(w["packages"]), f"{w['upstream_ms']:.1f} ms", f"{w['unreallib_ms']:.1f} ms",
+                      speedup(w["speedup"]), speedup(w["geomean_speedup"]))
+    total = report["total"]
+    table.add_section()
+    table.add_row("[bold]Total[/]", str(total["packages"]), f"{total['upstream_ms']:.1f} ms",
+                  f"{total['unreallib_ms']:.1f} ms", speedup(total["speedup"]), speedup(total["geomean_speedup"]))
+    console.print(table)
+    console.print("[dim]Speedup = total upstream time / total UnrealLib time; Geomean weights every package "
+                  "equally. See docs/development.md (Speed comparison) for what is timed.[/]")
+
+
+def do_compare(preset: Preset, details: bool = False, min_parity: float | None = None,
+               min_speedup: float | None = None, build: bool = True) -> None:
+    """Accuracy (ParityReport) and speed (SpeedComparison) of UnrealLib against upstream C# UELib."""
+    fixtures = fixture_dir()
+    if not fixtures:
+        raise ManageError("the comparison needs the Mirror's Edge packages: "
+                          "`config set mirrorsedge_dir <.../TdGame/CookedPC>`")
+    if preset.build_type not in RELEASE_TYPES:
+        console.print(f"[yellow]{preset.name} is a {preset.build_type} build: the speed comparison will be "
+                      "skipped (use a Release preset).[/]")
+    if cache_value(preset, "UNREALLIB_BUILD_DIFFERENTIAL") != "ON":
+        if not tool_version(["dotnet", "--version"]):
+            raise ManageError("the comparison builds upstream UELib with the .NET SDK, but `dotnet` was not found")
+        do_configure(preset, differential=True)
+    if build:
+        do_build(preset, targets=("UnrealLibDifferentialTests", "unreallib_uelib_dump"))
+
+    reports = preset.binary_dir / "compare"
+    reports.mkdir(parents=True, exist_ok=True)
+    parity_file, speed_file = reports / "parity.json", reports / "speed.json"
+    for stale in (parity_file, speed_file):
+        stale.unlink(missing_ok=True)
+    extra = {
+        "UNREALLIB_MIRRORSEDGE_DIR": fixtures,
+        "UNREALLIB_PARITY_REPORT": str(parity_file),
+        "UNREALLIB_SPEED_REPORT": str(speed_file),
+    }
+    if min_parity is not None:
+        extra["UNREALLIB_PARITY_MIN_PERCENT"] = str(min_parity)
+    if min_speedup is not None:
+        extra["UNREALLIB_MIN_SPEEDUP"] = str(min_speedup)
+
+    step(f"Compare with upstream UELib ({preset.name})")
+    code = run(["ctest", "--preset", preset.name, "-R", COMPARE_TESTS, "--output-on-failure"],
+               env=environment_for(preset, extra), check=False)
+
+    console.print()
+    if parity_file.exists():
+        print_parity_report(json.loads(parity_file.read_text(encoding="utf-8")))
+    else:
+        console.print("[yellow]No accuracy report was written (see the CTest output above).[/]")
+    if speed_file.exists():
+        print_speed_report(json.loads(speed_file.read_text(encoding="utf-8")), details)
+    elif preset.build_type in RELEASE_TYPES:
+        console.print("[yellow]No speed report was written (see the CTest output above).[/]")
+    console.print(f"[dim]Reports: {reports.relative_to(ROOT)}[/]")
+    if code != 0:
+        raise ManageError(f"the comparison tests failed (ctest exit code {code})")
+
+
 def tool_path(preset: Preset, tool: str) -> Path:
     folder, stem = TOOLS[tool]
     return preset.binary_dir / folder / (stem + (".exe" if IS_WINDOWS else ""))
@@ -552,7 +691,7 @@ def do_doctor() -> None:
     add("clang-cl", tool_version(["clang-cl", "--version"], env=msvc_env), False, "clang-cl presets")
     add("ccache", tool_version(["ccache", "--version"]), False, "used for MSVC builds when found")
     add("doxygen", tool_version(["doxygen", "--version"]), False, "`docs` command")
-    add("dotnet", tool_version(["dotnet", "--version"]), False, "differential tests vs. upstream UELib")
+    add("dotnet", tool_version(["dotnet", "--version"]), False, "differential tests and `compare` vs. upstream UELib")
     add("git", tool_version(["git", "--version"]), False)
     console.print(table)
 
@@ -697,6 +836,23 @@ def docs(preset: str | None, open_browser: bool) -> None:
     do_docs(get_preset(preset), open_browser)
 
 
+@cli.command()
+@preset_argument
+@click.option("--details", is_flag=True, help="Also show per-package times.")
+@click.option("--min-parity", type=float, metavar="PERCENT", help="Fail if the overall accuracy is below PERCENT.")
+@click.option("--min-speedup", type=float, metavar="FACTOR", help="Fail if UnrealLib is less than FACTOR times faster.")
+@click.option("--no-build", is_flag=True, help="Do not build before comparing.")
+def compare(preset: str | None, details: bool, min_parity: float | None, min_speedup: float | None,
+            no_build: bool) -> None:
+    """Compare UnrealLib with upstream C# UELib: accuracy and speed.
+
+    Configures PRESET with the differential tests if needed (needs dotnet and the Mirror's Edge packages), builds
+    upstream UELib and the tests, and runs them. Without PRESET, a Release preset is used (speed is only measured in
+    Release builds).
+    """
+    do_compare(compare_preset(preset), details, min_parity, min_speedup, build=not no_build)
+
+
 @cli.command(context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
 @click.argument("tool", type=click.Choice(sorted(TOOLS)))
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
@@ -824,6 +980,7 @@ def interactive_menu() -> None:
         "Configure": "configure",
         "Clean build directories": "clean",
         "Generate documentation": "docs",
+        "Compare with upstream UELib (accuracy + speed)": "compare",
         "Run a tool": "tool",
         "List presets": "presets",
         "Check environment (doctor)": "doctor",
@@ -850,6 +1007,9 @@ def interactive_menu() -> None:
                     choices=[questionary.Choice(p.name, checked=False) for p in load_presets().values()
                              if p.binary_dir.exists()]))
                 do_clean([get_preset(n) for n in names])
+            elif action == "compare":
+                preset = choose_preset("Preset (Release for the speed comparison)")
+                do_compare(preset, details=ask(questionary.confirm("Show per-package times?", default=False)))
             else:
                 preset = choose_preset()
                 if action == "all":

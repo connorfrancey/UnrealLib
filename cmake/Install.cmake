@@ -58,3 +58,21 @@ install(FILES
 install(FILES "${PROJECT_SOURCE_DIR}/LICENSE"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/UnrealLib"
         COMPONENT UnrealLib_Runtime)
+
+function(unreallib_install_notice dependency license_file)
+    if (${dependency}_SOURCE_DIR)
+        install(FILES "${${dependency}_SOURCE_DIR}/${license_file}"
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/UnrealLib/licenses"
+                RENAME "${dependency}.txt"
+                COMPONENT UnrealLib_Runtime)
+    endif ()
+endfunction()
+
+unreallib_install_notice(magic_enum LICENSE)
+unreallib_install_notice(unordered_dense LICENSE)
+unreallib_install_notice(mio LICENSE)
+unreallib_install_notice(fast_float LICENSE-MIT)
+if (UNREALLIB_BUILD_TOOLS)
+    unreallib_install_notice(expected COPYING)
+    unreallib_install_notice(RapidJSON license.txt)
+endif ()

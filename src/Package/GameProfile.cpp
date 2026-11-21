@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <fmt/format.h>
+#include <magic_enum/magic_enum.hpp>
 
 #include <UnrealLib/Core/Error.hpp>
 #include <UnrealLib/Package/PackageSummary.hpp>
@@ -12,23 +13,14 @@ namespace UnrealLib
 {
     std::string_view to_string(EngineGeneration generation) noexcept
     {
-        switch (generation)
-        {
-        case EngineGeneration::UE3: return "UE3";
-        }
-        return "Unknown";
+        const auto name = magic_enum::enum_name(generation);
+        return name.empty() ? "Unknown" : name;
     }
 
     std::string_view to_string(Platform platform) noexcept
     {
-        switch (platform)
-        {
-        case Platform::PC: return "PC";
-        case Platform::Xbox360: return "Xbox360";
-        case Platform::PS3: return "PS3";
-        case Platform::Unknown: break;
-        }
-        return "Unknown";
+        const auto name = magic_enum::enum_name(platform);
+        return name.empty() ? "Unknown" : name;
     }
 
     GameProfile make_mirrors_edge_pc_profile()
@@ -54,6 +46,7 @@ namespace UnrealLib
         p.assets.skeletal_mesh_leading_int = true;
         p.assets.skeletal_gpu_uv_count = true;
         p.assets.skeletal_lod_ends_after_gpu_skin = true;
+        p.assets.font_kerning_tables = true;
         p.verified = true;
         p.notes =
             "Upstream UELib: GameBuild [Build(536, 43)] MirrorsEdge. Verified against the Steam release: 2425/2426 "
@@ -76,6 +69,7 @@ namespace UnrealLib
         p.endian = Endian::Little;
         p.compression_methods = {CompressionMethod::None, CompressionMethod::Lzo};
         p.reflection.dishonored_class_layout = true;
+        p.assets.lightmap_texture_trailing_word = true;
         p.verified = false;
         p.notes = "Upstream UELib: GameBuild [Build(801, 30)] Dishonored and its `#if DISHONORED` branches. Steam "
                   "release: 801/30, engine 9411, cooker 133, LZO; packages, tables and reflection checked.";

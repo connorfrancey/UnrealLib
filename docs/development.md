@@ -28,6 +28,8 @@ uv run uelib.py test clang-cl-x64-asan -R Linker
 uv run uelib.py test --sweep         # include the full-corpus sweeps
 uv run uelib.py test --no-log        # don't write build/logs/<preset>/ (see below)
 uv run uelib.py configure --differential   # enable differential tests vs. upstream UELib
+uv run uelib.py compare              # accuracy + speed vs. upstream UELib (Release preset; see below)
+uv run uelib.py compare --details --min-parity 100 --min-speedup 1.5
 uv run uelib.py docs --open
 uv run uelib.py tool inspector Core.u --exports --limit 20
 uv run uelib.py clean msvc-x86-release     # or --all; only ever deletes build/<preset>
@@ -208,6 +210,97 @@ MirrorsEdgeConsole.u, Td*Content.u, Fp.u): property tags of all 58,845 objects u
 (e.g. an enum-parsing exception in `UDefaultProperty.DeserializeTagUE3` for Engine UI components); UnrealLib reads the
 properties of all of them.
 
+#### `uelib.py compare`
+
+`uv run uelib.py compare [PRESET]` runs the parity report and the speed comparison below and shows both as tables.
+If the preset doesn't have the differential tests enabled yet, it configures them first. This needs `dotnet` and the
+`mirrorsedge_dir` setting. It then builds upstream UELib and the tests. Without PRESET, it uses the default preset if
+that is a Release build, and `msvc-x64-release` otherwise, because speed is only measured in Release builds.
+
+| Option | Effect |
+|--------|--------|
+| `--details` | also show per-package times, slowest speedups first |
+| `--min-parity PERCENT` | exit with an error if the overall accuracy is below PERCENT |
+| `--min-speedup FACTOR` | exit with an error if UnrealLib is less than FACTOR times faster overall |
+| `--no-build` | skip the build |
+
+It writes the JSON reports to `build/<preset>/compare/parity.json` and `speed.json`. The command is also in the
+interactive menu.
+
+#### Parity report
+
+`DifferentialTest.ParityReport` turns the comparisons above into one accuracy percentage. Each item both libraries
+produce is scored as matching or not, per area:
+
+| Area | Unit |
+|------|------|
+| Package summary fields | one summary field |
+| Game detection | one package |
+| Name, import, export and depends tables | one table row |
+| Property tags | one property tag |
+| Bytecode tokens | one (memory position, code) pair; missing and extra tokens both count |
+| Script storage sizes | one script |
+
+It prints each area's accuracy and two overall figures. The headline figure weights each area equally. The other
+weights every item equally, so the largest areas (names, tokens) dominate it. Both are rounded down, so 100.00%
+means every item matched. The known upstream deviations listed above are normalized first, so they don't lower the
+score. Objects and packages that upstream fails to read have no reference to compare against. They are counted
+separately as "beyond upstream".
+
+```powershell
+$env:UNREALLIB_PARITY_MIN_PERCENT = "100"          # optional: fail below this overall accuracy
+$env:UNREALLIB_PARITY_REPORT = "parity.json"       # optional: also write the report as JSON
+build/msvc-x64-release/tests/UnrealLibDifferentialTests.exe --gtest_filter=*ParityReport*
+```
+
+Result on the 54 top-level Mirror's Edge packages: 100.00% in every area: 1,080 summary fields, 173,228 table rows,
+13,397 property tags, 439,779 tokens and 12,097 storage sizes. UnrealLib also reads the properties of the 381 objects
+upstream fails on.
+
+#### Speed comparison
+
+`DifferentialSpeed.SpeedComparison` times UnrealLib against upstream on the same packages and work. The CTest step
+`Differential.UELibBench.Run` runs `UELibDump --bench`, which times upstream (a few seconds). The test then repeats
+the work with UnrealLib. Both sides make one warm-up pass, which also covers .NET JIT and tiered compilation. They then
+take the fastest of 5 runs per package. Upstream's console logging is switched off, because UnrealLib logs nothing by
+default.
+
+| Workload | Packages | Upstream | UnrealLib |
+|----------|----------|----------|-----------|
+| Open package | every uncompressed package (upstream reads no tables of compressed ones) | `UnrealLoader.LoadPackage` | `Package::open` |
+| Read all objects | every uncompressed `.u` | `InitializePackage(All)` + `Load` of each export | `read_field` + `decode_script`, or `read_properties`, per export |
+
+The table shows two speedups. "Speedup" is total upstream time divided by total UnrealLib time, so the largest
+packages dominate it. "Geomean" is the geometric mean of the per-package speedups, which weights every package
+equally. The test runs only in Release builds and skips in Debug. Differential tests run serially, so the timings
+don't compete with other tests for the CPU.
+
+Two differences in design affect the numbers:
+
+* `Package::open` reads the whole file into memory, while upstream reads only the header and tables. For large data
+  packages (`RefShaderCache-*`, `GlobalPersistentCookerData`), this makes opening slower than upstream.
+* To resolve class hierarchies, UnrealLib's `Linker` loads the packages that define imported classes and indexes each
+  one's exports on first use. Upstream never loads other packages. A `Linker` that reads many packages pays this cost
+  once, so the benchmark loads and indexes dependencies before starting the clock. Without this, the small
+  `Td*Content.u` packages take about 12 ms instead of under 1 ms.
+
+```powershell
+$env:UNREALLIB_BENCH_DETAILS = "1"                # optional: per-package times
+$env:UNREALLIB_MIN_SPEEDUP = "1.5"                # optional: fail below this overall speedup
+ctest --preset msvc-x64-release -R "UELibBench|SpeedComparison"
+```
+
+Result on the top-level Mirror's Edge packages (MSVC Release, .NET 10.0.14, desktop CPU, 2026-11-11):
+
+| Workload | Packages | UELib (C#) | UnrealLib | Speedup | Geomean |
+|----------|----------|------------|-----------|---------|---------|
+| Open package | 27 | 161.3 ms | 110 ms | 1.5× | 2.1× |
+| Read all objects | 12 | 294.7 ms | 102 ms | 2.9× | 3.4× |
+| Total | | 456.0 ms | 212 ms | 2.2× | 2.4× |
+
+UnrealLib opens script packages 6–8× faster (Engine.u, TdGame.u). The large data packages pull the totals down.
+Timings vary between machines and between runs, by about 1.5× when the machine is busy.
+
 ### AddressSanitizer
 
 ```powershell
@@ -316,7 +409,7 @@ Reference numbers (MSVC 19.51 x64 Release, 24-thread 4.4 GHz desktop):
 | M1 | Core, Serialization (reader/writer, bits, CompactIndex, FString, archives, limits, compression) | **done** |
 | M2 | Summary, names, imports, exports, depends, profiles, decompression, validation, tools | **done** (verified on 2426 packages) |
 | M3 | Linker (cross-package import resolution, search paths, cycles), class hierarchy (`is_a`), UObject header | **done** (verified on 2426 packages); typed object model continues in M4/M5 |
-| M4 | Property tags, typed property values, struct/array/map, unknown-property preservation | **done** (verified on 2426 packages: 9,656,419 properties, byte-exact round trip; with `ReflectionSchema` every one of 1,639,154 arrays decodes). `MapProperty` values are kept as raw bytes |
+| M4 | Property tags, typed property values, struct/array/map, unknown-property preservation | Mirror's Edge verified (9,656,419 properties round-trip byte-for-byte, 1,639,154 arrays decode with `ReflectionSchema`). Typed `MapProperty` values remain open |
 | M5 | Reflection (`UField`/`UStruct`/`UClass`/`UFunction`/`UState`/`UEnum`/`UConst`), bytecode decoder + IR | **done** (verified on 2426 packages: every reflection export consumes its data exactly; 13,770 scripts / 477,343 tokens end exactly at ScriptSize) |
 | M6 | Decompiler (expressions, control flow, UnrealScript output), `UnrealScriptDecompiler` tool | **done** (13,244 functions/states, 13,241 fully structured; 2,338 whole classes with 0 placeholders; see [decompiler.md](decompiler.md)) |
 | M7 | Assets (textures, sound, meshes, materials, animation) + PackageExtractor | **done** (every texture, sound, static/skeletal mesh, animation and material of the game; see [assets.md](assets.md)) |
@@ -330,22 +423,23 @@ Reference numbers (MSVC 19.51 x64 Release, 24-thread 4.4 GHz desktop):
 
 ## Known limitations
 
-* Objects are parsed up to and including their tagged script properties; reflection objects completely (bytecode
-  included); textures, sounds, static/skeletal meshes and animations completely (see [assets.md](assets.md)). Native
-  data of other classes (levels, BSP, terrain, fonts, particle systems, material shader caches) is available as the
-  export's remaining raw bytes.
+* Objects expose tagged script properties and their remaining native bytes. Dedicated readers cover reflection and
+  bytecode, selected texture/sound/mesh/animation layouts, fonts, and parts of BSP models and components. Asset layout
+  coverage depends on the game and version (see [assets.md](assets.md) and [supported_versions.md](supported_versions.md)).
 * Without a `ReflectionSchema`, only the built-in Core math structs are known: arrays and script-declared structs
   are kept as raw bytes (losslessly). Pass a `ReflectionSchema` over the game's script packages to decode them all.
 * `MapProperty` values are kept as raw bytes.
 * Decompiler: comments, `cpptext` and `#exec` directives are not stored in cooked packages. Labels in function code are generated (`J0x…`): only state code stores label names.
 * Intrinsic (native-only) classes are recognised by rule — an unexported `Core.Class` import — not from a list; their
   super chain is unknown (`Linker::is_a` returns std::nullopt for them, except "is not a Core.Component").
-* File versions < 249 and > 868, UE4/UE5, and LZX compression are rejected. For 868 (UDK), sounds, animations, static meshes and skeletal-mesh index buffers ≥ 806 are not read yet.
-* Thumbnail and import/export GUID tables (≥ 584 / ≥ 623) are detected but not parsed.
+* File versions below 249 and above 868, UE4/UE5, and LZX compression are rejected. UDK 868 reads sound, animation,
+  static and skeletal meshes in the verified corpus. Intermediate mesh layouts remain incomplete.
+* Thumbnail and import/export GUID tables (≥ 584 / ≥ 623) are parsed. The writer relocates tables and thumbnail
+  images within the preserved header.
 * Big-endian (console) packages are handled by the archive layer and summary round-trip tests but not verified
   against real console packages, and no built-in profile accepts them.
 * T3D export covers tagged properties, subobjects and brush geometry (not the level BSP tree); T3D import modifies
   existing objects only (no new actors/imports) and does not rebuild BSP (see [t3d.md](t3d.md)).
-* Differential comparison against upstream UELib covers the package summary and the name/import/export/depends
-  tables only; property values, reflection data and bytecode are verified by UnrealLib's own corpus sweeps. Upstream cannot read compressed packages' tables, so for the 1553
-  compressed packages the tables are verified only by UnrealLib's own fixture tests.
+* Differential comparison against upstream UELib covers package summaries, uncompressed name/import/export/depends
+  tables, and script-package property tags and bytecode. UnrealLib's corpus sweeps cover compressed package tables,
+  property value round trips, and complete reflection reads.

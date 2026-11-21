@@ -2,6 +2,10 @@
 
 #include <UnrealLib/Properties/PropertyValue.hpp>
 
+#include <fast_float/fast_float.h>
+
+#include <UnrealLib/Serialization/SerializationLimits.hpp>
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -139,7 +143,7 @@ namespace UnrealLib
             if (Text::iequals(t, "nan")) return std::bit_cast<float>(0x7FC00000u);
             if (Text::iequals(t, "-nan")) return std::bit_cast<float>(0xFFC00000u);
             float value = 0.0f;
-            const auto r = std::from_chars(t.data(), t.data() + t.size(), value);
+            const auto r = fast_float::from_chars(t.data(), t.data() + t.size(), value);
             if (t.empty() || r.ec != std::errc{} || r.ptr != t.data() + t.size()) bad(text, "expected a float");
             return value;
         }
@@ -214,6 +218,28 @@ namespace UnrealLib
                 case PropertyType::Interface: v.value = ObjectValue{}; break;
                 case PropertyType::Delegate: v.value = DelegateValue{ObjectIndex{}, name("None")}; break;
                 case PropertyType::Array: v.value = ArrayValue{}; break;
+                case PropertyType::FixedArray:
+                {
+                    if (!type.inner || type.fixed_count < 0)
+                    {
+                        throw Error(ErrorCode::InvalidData, "invalid fixed array declaration");
+                    }
+                    constexpr SerializationLimits limits;
+                    const auto count = static_cast<std::uint32_t>(type.fixed_count);
+                    if (count > limits.max_array_count || count > limits.max_allocation_bytes / sizeof(PropertyValue))
+                    {
+                        throw Error(ErrorCode::LimitExceeded, "fixed array declaration exceeds the array count limit");
+                    }
+                    ArrayValue array;
+                    array.count = type.fixed_count;
+                    array.fixed_size = true;
+                    if (array.count > 0)
+                    {
+                        array.elements.assign(static_cast<std::size_t>(array.count), default_value(*type.inner));
+                    }
+                    v.value = std::move(array);
+                    break;
+                }
                 case PropertyType::Struct:
                 {
                     StructValue s;
@@ -335,9 +361,15 @@ namespace UnrealLib
                     }
                     return like;
                 }
-                const TypeDesc* inner = type != nullptr && type->type == PropertyType::Array ? type->inner.get() : nullptr;
+                const auto array_type = like.fixed_size ? PropertyType::FixedArray : PropertyType::Array;
+                const TypeDesc* inner = type != nullptr && type->type == array_type ? type->inner.get() : nullptr;
                 const std::vector<std::string_view> items = split_list(text);
                 ArrayValue out;
+                out.fixed_size = like.fixed_size;
+                if (out.fixed_size && (like.count < 0 || items.size() != static_cast<std::size_t>(like.count)))
+                {
+                    bad(text, "fixed array element count does not match its declaration");
+                }
                 out.elements.reserve(items.size());
                 std::optional<PropertyValue> fallback;
                 for (std::size_t i = 0; i < items.size(); ++i)
@@ -432,6 +464,17 @@ namespace UnrealLib
     PropertyValue parse_property_value(std::string_view text, const TypeDesc& type, const PropertyParseOptions& options)
     {
         const Parser parser(options);
+        if (type.type == PropertyType::FixedArray)
+        {
+            if (!type.inner)
+            {
+                throw Error(ErrorCode::InvalidData, "fixed array element type unknown");
+            }
+            ArrayValue array;
+            array.count = type.fixed_count;
+            array.fixed_size = true;
+            return parser.parse(text, PropertyValue{std::move(array)}, &type);
+        }
         return parser.parse(text, parser.default_value(type), &type);
     }
 

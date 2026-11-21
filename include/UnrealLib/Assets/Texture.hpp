@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief UE3 textures (Texture2D and subclasses, TextureCube): metadata, mip maps, pixel formats and decoding.
+/// @brief UE3 texture metadata, mip maps, movie payloads, pixel formats and decoding.
 
 #include <array>
 #include <cstddef>
@@ -106,6 +106,7 @@ namespace UnrealLib::Assets
         BulkData flash_mip_data;               ///< CachedFlashMipData (version >= 857).
         std::vector<TextureMip> etc_mips;      ///< Cached ETC mips for mobile (version >= 864).
         AssetProperties properties;       ///< All tagged properties.
+        std::optional<std::uint32_t> lightmap_trailing_word; ///< Native LightMapTexture2D suffix in Dishonored PC.
 
         /// @brief Index of the largest mip whose payload is stored in this package, if any.
         [[nodiscard]] std::optional<std::size_t> first_inline_mip() const noexcept;
@@ -147,4 +148,39 @@ namespace UnrealLib::Assets
     /// @brief Reads a TextureCube export.
     [[nodiscard]] TextureCube read_texture_cube(Linker& linker, ObjectRef object,
                                                 const PropertySchema* schema = nullptr);
+
+    /// @brief A TextureMovie with its serialized movie payload.
+    struct TextureMovie
+    {
+        BulkData source_art;        ///< UTexture source art.
+        BulkData raw_data;          ///< Encoded movie bytes, accessible through the bulk-data API.
+        AssetProperties properties; ///< All tagged properties.
+    };
+
+    /// @brief Reads a TextureMovie using the standard UE3 bulk-data layout (version 266 and later).
+    [[nodiscard]] TextureMovie read_texture_movie(Linker& linker, ObjectRef object,
+                                                  const PropertySchema* schema = nullptr);
+
+    /// @brief One mip level of a volume texture.
+    struct TextureMip3D
+    {
+        BulkData data;
+        std::uint32_t size_x = 0;
+        std::uint32_t size_y = 0;
+        std::uint32_t size_z = 0;
+    };
+
+    /// @brief A Texture3D with native dimensions, format and volume mips.
+    struct Texture3D
+    {
+        BulkData source_art;            ///< UTexture source art.
+        std::uint32_t size_x = 0;        ///< Native width.
+        std::uint32_t size_y = 0;        ///< Native height.
+        std::int32_t format = 0;         ///< Serialized pixel-format ordinal.
+        std::vector<TextureMip3D> mips; ///< Volume mip records.
+        AssetProperties properties;    ///< All tagged properties.
+    };
+
+    /// @brief Reads a Texture3D using the standard UE3 bulk-data layout (version 266 and later).
+    [[nodiscard]] Texture3D read_texture3d(Linker& linker, ObjectRef object, const PropertySchema* schema = nullptr);
 }

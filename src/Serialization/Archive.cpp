@@ -1,9 +1,13 @@
 #include <UnrealLib/Serialization/Archive.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
 #include <fmt/format.h>
+#ifdef _WIN32
+#include <mio/mmap.hpp>
+#endif
 
 #include <UnrealLib/Core/Error.hpp>
 
@@ -81,13 +85,28 @@ namespace UnrealLib
     std::vector<std::byte> read_file(const std::filesystem::path& path, std::uint64_t max_size)
     {
         FileArchive archive(path);
-        if (archive.size() > max_size)
+        const auto limit = std::min<std::uint64_t>(max_size, std::vector<std::byte>().max_size());
+        if (archive.size() > limit)
         {
             throw SerializationError(ErrorCode::LimitExceeded,
                 fmt::format("file '{}' is {} bytes, above the limit of {} bytes", archive.name(), archive.size(),
-                            max_size));
+                            limit));
         }
-        std::vector<std::byte> bytes(static_cast<std::size_t>(archive.size()));
+        const auto size = static_cast<std::size_t>(archive.size());
+#ifdef _WIN32
+        // Windows prevents truncation of a mapped file. Stream reads on POSIX can report short reads safely.
+        if (size != 0)
+        {
+            std::error_code error;
+            const auto mapping = mio::make_mmap_source(path.native(), 0, size, error);
+            if (!error)
+            {
+                const auto mapped = std::as_bytes(std::span(mapping.data(), size));
+                return {mapped.begin(), mapped.end()};
+            }
+        }
+#endif
+        std::vector<std::byte> bytes(size);
         archive.read_at(0, bytes);
         return bytes;
     }

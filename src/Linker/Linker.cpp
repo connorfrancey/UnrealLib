@@ -1,5 +1,7 @@
 #include <UnrealLib/Linker/Linker.hpp>
 
+#include <ankerl/unordered_dense.h>
+
 #include <algorithm>
 #include <unordered_set>
 
@@ -64,7 +66,7 @@ namespace UnrealLib
     {
         // name_key(outer, full name) -> export indices (several when objects of different classes share a name, e.g.
         // Core.u has a MetaData *instance* named "MetaData" while the class MetaData is intrinsic).
-        std::unordered_map<std::string, std::vector<std::size_t>> exports;
+        ankerl::unordered_dense::map<std::string, std::vector<std::size_t>> exports;
     };
 
     Linker::Linker(LoadOptions options) : m_options(std::move(options))
